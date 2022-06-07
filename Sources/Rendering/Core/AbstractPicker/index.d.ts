@@ -53,7 +53,7 @@ export interface vtkAbstractPicker extends vtkObject {
 	 * @default [0.0, 0.0, 0.0]
 	 */
 	getPickPositionByReference(): Vector3;
-	
+
 	/**
 	 * 
 	 */

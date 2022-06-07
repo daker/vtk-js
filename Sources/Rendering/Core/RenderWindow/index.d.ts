@@ -53,7 +53,7 @@ export interface vtkRenderWindow extends vtkObject {
 	 * @param {String} format 
 	 * @param {*} opts 
 	 */
-	captureImages(format?: string, opts?: any): void;
+	captureImages(format?: string, opts?: any): Promise<string>[];
 
 	/**
 	 * 
@@ -120,10 +120,10 @@ export interface vtkRenderWindow extends vtkObject {
 
 	/**
 	 * 
-	 * @param name 
+	 * @param {String} [name] 
 	 * @param initialValues 
 	 */
-	newAPISpecificView(name: string, initialValues: object): any;
+	newAPISpecificView(name?: string, initialValues: object): any;
 
 	/**
 	 * Remove renderer
