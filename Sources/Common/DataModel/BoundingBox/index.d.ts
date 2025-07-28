@@ -325,6 +325,29 @@ export function cutWithPlane(
   normal: Vector3
 ): boolean;
 
+/**
+ * Clamp the divisions to ensure the total number doesn't exceed targetBins
+ * @param {Number} targetBins - Maximum number of bins allowed
+ * @param {Number[]} divs - Divisions array to adjust [divX, divY, divZ]
+ */
+export function clampDivisions(targetBins: number, divs: number[]): void;
+
+/**
+ * Compute the number of divisions given the current bounding box and a
+ * target number of buckets/bins. Handles degenerate bounding boxes properly.
+ * @param {Bounds} bounds - The bounding box
+ * @param {Number} totalBins - Target number of bins
+ * @param {Number[]} divs - Output array to store divisions [divX, divY, divZ]
+ * @param {Bounds} [adjustedBounds] - Output array to store adjusted bounds if needed
+ * @returns {Number} The actual total number of bins
+ */
+export function computeDivisions(
+  bounds: Bounds,
+  totalBins: number,
+  divs: number[],
+  adjustedBounds?: Bounds
+): number;
+
 declare class BoundingBox {
   getBounds(): Bounds;
   /**
@@ -409,10 +432,9 @@ declare class BoundingBox {
 
   /**
    * Inflates a bounding box.
-   * @param {Bounds} bounds
-   * @param {number} delta
+   * @param {number} [delta] The amount to inflate the bounding box by.
    */
-  inflate(bounds: Bounds, delta: number): Bounds;
+  inflate(delta?: number): Bounds;
 
   /**
    * Scales a bounding box.
