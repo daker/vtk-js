@@ -96,7 +96,7 @@ function vtkWebGPUTexture(publicAPI, model) {
       req.height = req.imageBitmap.height;
       req.depth = 1;
       req.format = 'rgba8unorm';
-      req.flip = true;
+      req.flip = false;
       _copyImageToTexture(req.imageBitmap);
       return;
     }

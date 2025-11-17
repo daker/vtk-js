@@ -82,6 +82,8 @@ function vtkProperty(publicAPI, model) {
     publicAPI.setInterpolation(Interpolation.GOURAUD);
   publicAPI.setInterpolationToPhong = () =>
     publicAPI.setInterpolation(Interpolation.PHONG);
+  publicAPI.setInterpolationToPBR = () =>
+    publicAPI.setInterpolation(Interpolation.PBR);
   publicAPI.getInterpolationAsString = () =>
     macro.enumToString(Interpolation, model.interpolation);
 
@@ -116,6 +118,7 @@ const DEFAULT_VALUES = {
   specular: 0,
   specularPower: 1,
   opacity: 1,
+  occlusionStrength: 1,
   interpolation: Interpolation.GOURAUD,
   representation: Representation.SURFACE,
   edgeVisibility: false,
@@ -152,6 +155,7 @@ export function extend(publicAPI, model, initialValues = {}) {
     'baseIOR',
     'specular',
     'specularPower',
+    'occlusionStrength',
     'opacity',
     'edgeVisibility',
     'lineWidth',

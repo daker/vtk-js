@@ -36,7 +36,7 @@ function createTextureWithMipmap(src, level) {
 
   fetch(src)
     .then((response) => response.blob())
-    .then((blob) => createImageBitmap(blob))
+    .then((blob) => createImageBitmap(blob, { imageOrientation: 'flipY' }))
     .then((imageBitmap) => {
       tex.setInterpolate(true);
       tex.setEdgeClamp(true);
@@ -85,9 +85,9 @@ const params = {
   Animation: '',
   Variant: 0,
   UseBackground: false,
-  Specular: renderer.getEnvironmentTextureSpecularStrength?.() ?? 1.0,
-  Diffuse: renderer.getEnvironmentTextureDiffuseStrength?.() ?? 1.0,
-  FOV: renderer.getActiveCamera().getViewAngle(),
+  Specular: 1.0,
+  Diffuse: 1.0,
+  FOV: 30,
 };
 const controllers = {};
 

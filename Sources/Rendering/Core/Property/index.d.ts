@@ -382,6 +382,7 @@ export interface vtkProperty extends vtkObject {
    */
   setInterpolation(interpolation: Interpolation): boolean;
 
+
   /**
    * Set interpolation to 0 means `FLAT`.
    */
@@ -396,6 +397,11 @@ export interface vtkProperty extends vtkObject {
    * Set interpolation to 2 means `PHONG`.
    */
   setInterpolationToPhong(): boolean;
+
+  /**
+   * Set interpolation to 3 means `PBR`.
+   */
+  setInterpolationToPBR (): boolean;
 
   /**
    * Set lighting flag for an object.

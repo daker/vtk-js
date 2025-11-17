@@ -11,6 +11,7 @@ import vtkShaderProgram from 'vtk.js/Sources/Rendering/OpenGL/ShaderProgram';
 import vtkViewNode from 'vtk.js/Sources/Rendering/SceneGraph/ViewNode';
 import vtkPolyDataVS from 'vtk.js/Sources/Rendering/OpenGL/glsl/vtkPolyDataVS.glsl';
 import vtkPolyDataFS from 'vtk.js/Sources/Rendering/OpenGL/glsl/vtkPolyDataFS.glsl';
+import vtkPBRFunctions from 'vtk.js/Sources/Rendering/OpenGL/glsl/vtkPBRFunctions.glsl';
 
 import vtkReplacementShaderMapper from 'vtk.js/Sources/Rendering/OpenGL/ReplacementShaderMapper';
 
@@ -283,6 +284,251 @@ function vtkOpenGLPolyDataMapper(publicAPI, model) {
 
     const lastLightCount =
       model.lastBoundBO.getReferenceByName('lastLightCount');
+
+    const ppty = actor.getProperty();
+    const usePBR = ppty.getInterpolation() === Shading.PBR;
+
+    if (usePBR && lastLightComplexity > 0) {
+      FSSource = vtkShaderProgram.substitute(
+        FSSource,
+        '//VTK::Light::Dec',
+        vtkPBRFunctions
+      ).result;
+
+      const property = actor.getProperty();
+
+      const textures = [
+        ['Diffuse', property.getDiffuseTexture?.()],
+        ['ORM', property.getORMTexture?.()],
+        ['RM', property.getRMTexture?.()],
+        ['Roughness', property.getRoughnessTexture?.()],
+        ['Metallic', property.getMetallicTexture?.()],
+        ['AmbientOcclusion', property.getAmbientOcclusionTexture?.()],
+        ['Emission', property.getEmissionTexture?.()],
+        ['Normal', property.getNormalTexture?.()],
+      ];
+
+      let sstring = [
+        '  vec3 albedo = diffuseColor;',
+        '  float roughness = clamp(roughnessUniform, 0.04, 1.0);',
+        '  float metallic = clamp(metallicUniform, 0.0, 1.0);',
+        '  float ao = 1.0;',
+        '  vec3 emissiveColor = vec3(0.0);',
+      ];
+
+      if (textures) {
+        textures.forEach(([name, tex]) => {
+          if (!tex) return;
+          switch (name) {
+            case 'Diffuse':
+              sstring = sstring.concat([
+                '  vec4 albedoSample = texture(DiffuseTexture, tcoordVCVSOutput);',
+                '  albedo = albedoSample.rgb * diffuseColor;',
+                '  opacity = opacityUniform * albedoSample.a;',
+              ]);
+              break;
+            case 'ORM':
+              sstring = sstring.concat([
+                '  vec4 orm = texture(ORMTexture, tcoordVCVSOutput);',
+                '  ao = orm.r * aoStrengthUniform;',
+                '  roughness = orm.g * roughnessUniform;',
+                '  metallic = orm.b * metallicUniform;',
+              ]);
+              break;
+            case 'RM':
+              sstring = sstring.concat([
+                '  vec4 rm = texture(RMTexture, tcoordVCVSOutput);',
+                '  roughness = rm.g * roughnessUniform;',
+                '  metallic = rm.b * metallicUniform;',
+              ]);
+              break;
+            case 'Roughness':
+              sstring = sstring.concat([
+                '  roughness = clamp(texture(RoughnessTexture, tcoordVCVSOutput).g * roughnessUniform, 0.04, 1.0);',
+              ]);
+              break;
+            case 'Metallic':
+              sstring = sstring.concat([
+                '  metallic = clamp(texture(MetallicTexture, tcoordVCVSOutput).b * metallicUniform, 0.0, 1.0);',
+              ]);
+              break;
+            case 'AmbientOcclusion':
+              sstring = sstring.concat([
+                '  float aoSample = texture(AmbientOcclusionTexture, tcoordVCVSOutput).r;',
+                '  ao = aoSample * aoStrengthUniform;',
+              ]);
+              break;
+            case 'Emission':
+              sstring = sstring.concat([
+                '  emissiveColor = texture(EmissionTexture, tcoordVCVSOutput).rgb;',
+              ]);
+              break;
+            case 'Normal':
+              sstring = sstring.concat([
+                '  vec3 normalSample = texture(NormalTexture, tcoordVCVSOutput).xyz * 2.0 - 1.0;',
+                '  normalVCVSOutput = normalize(normalVCVSOutput + normalSample * normalStrengthUniform);',
+              ]);
+              break;
+            default:
+              break;
+          }
+        });
+      }
+
+      sstring = sstring.concat([
+        '  vec3 N = normalize(normalVCVSOutput);',
+        '  vec3 V = normalize(-vertexVC.xyz);',
+        '  vec3 Lo = vec3(0.0);',
+        '  //VTK::Light::Impl',
+      ]);
+
+      FSSource = vtkShaderProgram.substitute(
+        FSSource,
+        '//VTK::Light::Impl',
+        sstring,
+        false
+      ).result;
+
+      // Handle different lighting complexities for PBR (direct lighting)
+      switch (lastLightComplexity) {
+        case 1: {
+          const headlight = [
+            '  // Simple headlight PBR',
+            '  vec3 L = normalize(vec3(0.0, 0.0, 1.0));',
+            '  Lo += CookTorranceBRDF(N, V, L, albedo, roughness, metallic) * 5.0;',
+            '  //VTK::Light::Impl',
+          ];
+          FSSource = vtkShaderProgram.substitute(
+            FSSource,
+            '//VTK::Light::Impl',
+            headlight,
+            false
+          ).result;
+          break;
+        }
+        case 2: {
+          // Directional lights (light kit)
+          let dec = [];
+          for (let lc = 0; lc < lastLightCount; ++lc) {
+            dec = dec.concat([
+              `uniform vec3 lightColor${lc};`,
+              `uniform vec3 lightDirectionVC${lc}; // normalized`,
+            ]);
+          }
+          FSSource = vtkShaderProgram.substitute(
+            FSSource,
+            '//VTK::Light::Dec',
+            dec
+          ).result;
+
+          let body = [];
+          for (let lc = 0; lc < lastLightCount; ++lc) {
+            body = body.concat([
+              '  {',
+              `    vec3 L = normalize(-lightDirectionVC${lc});`,
+              `    vec3 radiance = lightColor${lc};`,
+              '    Lo += CookTorranceBRDF(N, V, L, albedo, roughness, metallic) * radiance;',
+              '  }',
+            ]);
+          }
+          body.push('  //VTK::Light::Impl');
+          FSSource = vtkShaderProgram.substitute(
+            FSSource,
+            '//VTK::Light::Impl',
+            body,
+            false
+          ).result;
+          break;
+        }
+        case 3: {
+          // Positional lights
+          let dec = [];
+          for (let lc = 0; lc < lastLightCount; ++lc) {
+            dec = dec.concat([
+              `uniform vec3 lightColor${lc};`,
+              `uniform vec3 lightDirectionVC${lc}; // normalized`,
+              `uniform vec3 lightPositionVC${lc};`,
+              `uniform vec3 lightAttenuation${lc};`,
+              `uniform float lightConeAngle${lc};`,
+              `uniform float lightExponent${lc};`,
+              `uniform int lightPositional${lc};`,
+            ]);
+          }
+          FSSource = vtkShaderProgram.substitute(
+            FSSource,
+            '//VTK::Light::Dec',
+            dec
+          ).result;
+
+          let body = [];
+          for (let lc = 0; lc < lastLightCount; ++lc) {
+            body = body.concat([
+              '  {',
+              '    vec3 L;',
+              '    float attenuation = 1.0;',
+              `    if (lightPositional${lc} == 0) {`,
+              `      L = normalize(-lightDirectionVC${lc});`,
+              '    } else {',
+              `      vec3 lightVec = lightPositionVC${lc} - vertexVC.xyz;`,
+              '      float distanceVC = length(lightVec);',
+              '      L = normalize(lightVec);',
+              `      attenuation = 1.0 / (lightAttenuation${lc}.x + lightAttenuation${lc}.y * distanceVC + lightAttenuation${lc}.z * distanceVC * distanceVC);`,
+              `      if (lightConeAngle${lc} <= 90.0) {`,
+              `        float coneDot = dot(-L, lightDirectionVC${lc});`,
+              `        if (coneDot >= cos(radians(lightConeAngle${lc}))) {`,
+              `          attenuation *= pow(coneDot, lightExponent${lc});`,
+              '        } else {',
+              '          attenuation = 0.0;',
+              '        }',
+              '      }',
+              '    }',
+              `    vec3 radiance = lightColor${lc} * attenuation;`,
+              '    Lo += CookTorranceBRDF(N, V, L, albedo, roughness, metallic) * radiance;',
+              '  }',
+            ]);
+          }
+          body.push('  //VTK::Light::Impl');
+          FSSource = vtkShaderProgram.substitute(
+            FSSource,
+            '//VTK::Light::Impl',
+            body,
+            false
+          ).result;
+          break;
+        }
+        default:
+          break;
+      }
+
+      const finalPBR = [
+        '  Lo += ambientColor * albedo * ao * ambient;',
+        '  Lo += emissiveColor * emissionUniform;',
+        '  if (environmentTextureDiffuseStrength > 0.0 || environmentTextureSpecularStrength > 0.0) {',
+        '    vec3 F0_env = mix(vec3(0.04), albedo, metallic);',
+        '    float NdV_env = max(dot(N, V), 0.0);',
+        '    vec3 F_env = F_Schlick(F0_env, NdV_env);',
+        '    vec3 kS_env = F_env;',
+        '    vec3 kD_env = (vec3(1.0) - kS_env) * (1.0 - metallic);',
+        '    vec3 diffuseIBL = SampleEnvironmentDiffuseIBL(N);',
+        '    vec3 R = reflect(-V, N);',
+        '    vec3 specularIBL = SampleEnvironmentSpecularIBL(R, roughness);',
+        '    Lo += kD_env * diffuseIBL * albedo * ao;',
+        '    Lo += kS_env * specularIBL;',
+        '  }',
+        '  gl_FragData[0] = vec4(Lo, opacity);',
+        '  //VTK::Light::Impl',
+      ];
+
+      FSSource = vtkShaderProgram.substitute(
+        FSSource,
+        '//VTK::Light::Impl',
+        finalPBR,
+        false
+      ).result;
+
+      shaders.Fragment = FSSource;
+      return;
+    }
 
     let sstring = [];
 
@@ -653,126 +899,117 @@ function vtkOpenGLPolyDataMapper(publicAPI, model) {
   };
 
   publicAPI.replaceShaderTCoord = (shaders, ren, actor) => {
-    if (model.lastBoundBO.getCABO().getTCoordOffset()) {
-      let VSSource = shaders.Vertex;
-      let GSSource = shaders.Geometry;
-      let FSSource = shaders.Fragment;
+    if (!model.lastBoundBO.getCABO().getTCoordOffset()) {
+      return;
+    }
 
+    const ppty = actor.getProperty();
+    const usePBR = ppty.getInterpolation() === Shading.PBR;
+
+    if (usePBR) {
       if (model.drawingEdges) {
         return;
       }
 
+      let VSSource = shaders.Vertex;
+      let GSSource = shaders.Geometry;
+      let FSSource = shaders.Fragment;
+
+      VSSource = vtkShaderProgram.substitute(
+        VSSource,
+        '//VTK::TCoord::Dec',
+        'attribute vec2 tcoordMC; varying vec2 tcoordVCVSOutput;'
+      ).result;
       VSSource = vtkShaderProgram.substitute(
         VSSource,
         '//VTK::TCoord::Impl',
         'tcoordVCVSOutput = tcoordMC;'
       ).result;
 
-      // we only handle the first texture by default
-      // additional textures are activated and we set the uniform
-      // for the texture unit they are assigned to, but you have to
-      // add in the shader code to do something with them
-      const tus = model.openGLActor.getActiveTextures();
-      let tNumComp = 2;
-      let tcdim = 2;
-      if (tus && tus.length > 0) {
-        tNumComp = tus[0].getComponents();
-        if (tus[0].getTarget() === model.context.TEXTURE_CUBE_MAP) {
-          tcdim = 3;
-        }
-      }
-      if (model.renderable.getColorTextureMap()) {
-        tNumComp = model.renderable
-          .getColorTextureMap()
-          .getPointData()
-          .getScalars()
-          .getNumberOfComponents();
-        tcdim = 2;
-      }
+      GSSource = vtkShaderProgram.substitute(GSSource, '//VTK::TCoord::Dec', [
+        'in vec2 tcoordVCVSOutput[];',
+        'out vec2 tcoordVCGSOutput;',
+      ]).result;
+      GSSource = vtkShaderProgram.substitute(
+        GSSource,
+        '//VTK::TCoord::Impl',
+        'tcoordVCGSOutput = tcoordVCVSOutput[i];'
+      ).result;
 
-      if (tcdim === 2) {
-        VSSource = vtkShaderProgram.substitute(
-          VSSource,
-          '//VTK::TCoord::Dec',
-          'attribute vec2 tcoordMC; varying vec2 tcoordVCVSOutput;'
-        ).result;
-        GSSource = vtkShaderProgram.substitute(GSSource, '//VTK::TCoord::Dec', [
-          'in vec2 tcoordVCVSOutput[];',
-          'out vec2 tcoordVCGSOutput;',
-        ]).result;
-        GSSource = vtkShaderProgram.substitute(
-          GSSource,
-          '//VTK::TCoord::Impl',
-          'tcoordVCGSOutput = tcoordVCVSOutput[i];'
-        ).result;
-        FSSource = vtkShaderProgram.substitute(FSSource, '//VTK::TCoord::Dec', [
-          'varying vec2 tcoordVCVSOutput;',
-          'uniform sampler2D texture1;',
-        ]).result;
-        if (tus && tus.length >= 1) {
-          switch (tNumComp) {
-            case 1:
-              FSSource = vtkShaderProgram.substitute(
-                FSSource,
-                '//VTK::TCoord::Impl',
-                [
-                  '  vec4 tcolor = texture2D(texture1, tcoordVCVSOutput);',
-                  '  ambientColor = ambientColor*tcolor.r;',
-                  '  diffuseColor = diffuseColor*tcolor.r;',
-                ]
-              ).result;
-              break;
-            case 2:
-              FSSource = vtkShaderProgram.substitute(
-                FSSource,
-                '//VTK::TCoord::Impl',
-                [
-                  '  vec4 tcolor = texture2D(texture1, tcoordVCVSOutput);',
-                  '  ambientColor = ambientColor*tcolor.r;',
-                  '  diffuseColor = diffuseColor*tcolor.r;',
-                  '  opacity = opacity * tcolor.g;',
-                ]
-              ).result;
-              break;
-            default:
-              FSSource = vtkShaderProgram.substitute(
-                FSSource,
-                '//VTK::TCoord::Impl',
-                [
-                  '  vec4 tcolor = texture2D(texture1, tcoordVCVSOutput);',
-                  '  ambientColor = ambientColor*tcolor.rgb;',
-                  '  diffuseColor = diffuseColor*tcolor.rgb;',
-                  '  opacity = opacity * tcolor.a;',
-                ]
-              ).result;
-          }
-        }
-      } else {
-        VSSource = vtkShaderProgram.substitute(
-          VSSource,
-          '//VTK::TCoord::Dec',
-          'attribute vec3 tcoordMC; varying vec3 tcoordVCVSOutput;'
-        ).result;
-        GSSource = vtkShaderProgram.substitute(GSSource, '//VTK::TCoord::Dec', [
-          'in vec3 tcoordVCVSOutput[];',
-          'out vec3 tcoordVCGSOutput;',
-        ]).result;
-        GSSource = vtkShaderProgram.substitute(
-          GSSource,
-          '//VTK::TCoord::Impl',
-          'tcoordVCGSOutput = tcoordVCVSOutput[i];'
-        ).result;
-        FSSource = vtkShaderProgram.substitute(FSSource, '//VTK::TCoord::Dec', [
-          'varying vec3 tcoordVCVSOutput;',
-          'uniform samplerCube texture1;',
-        ]).result;
+      FSSource = vtkShaderProgram.substitute(FSSource, '//VTK::TCoord::Dec', [
+        'varying vec2 tcoordVCVSOutput;',
+      ]).result;
+
+      shaders.Vertex = VSSource;
+      shaders.Geometry = GSSource;
+      shaders.Fragment = FSSource;
+      return;
+    }
+
+    // Original non-PBR texture coordinate path
+    let VSSource = shaders.Vertex;
+    let GSSource = shaders.Geometry;
+    let FSSource = shaders.Fragment;
+
+    if (model.drawingEdges) {
+      return;
+    }
+
+    VSSource = vtkShaderProgram.substitute(
+      VSSource,
+      '//VTK::TCoord::Impl',
+      'tcoordVCVSOutput = tcoordMC;'
+    ).result;
+
+    // we only handle the first texture by default
+    // additional textures are activated and we set the uniform
+    // for the texture unit they are assigned to, but you have to
+    // add in the shader code to do something with them
+    const tus = model.openGLActor.getActiveTextures();
+    let tNumComp = 2;
+    let tcdim = 2;
+    if (tus && tus.length > 0) {
+      tNumComp = tus[0].getComponents();
+      if (tus[0].getTarget() === model.context.TEXTURE_CUBE_MAP) {
+        tcdim = 3;
+      }
+    }
+    if (model.renderable.getColorTextureMap()) {
+      tNumComp = model.renderable
+        .getColorTextureMap()
+        .getPointData()
+        .getScalars()
+        .getNumberOfComponents();
+      tcdim = 2;
+    }
+
+    if (tcdim === 2) {
+      VSSource = vtkShaderProgram.substitute(
+        VSSource,
+        '//VTK::TCoord::Dec',
+        'attribute vec2 tcoordMC; varying vec2 tcoordVCVSOutput;'
+      ).result;
+      GSSource = vtkShaderProgram.substitute(GSSource, '//VTK::TCoord::Dec', [
+        'in vec2 tcoordVCVSOutput[];',
+        'out vec2 tcoordVCGSOutput;',
+      ]).result;
+      GSSource = vtkShaderProgram.substitute(
+        GSSource,
+        '//VTK::TCoord::Impl',
+        'tcoordVCGSOutput = tcoordVCVSOutput[i];'
+      ).result;
+      FSSource = vtkShaderProgram.substitute(FSSource, '//VTK::TCoord::Dec', [
+        'varying vec2 tcoordVCVSOutput;',
+        'uniform sampler2D texture1;',
+      ]).result;
+      if (tus && tus.length >= 1) {
         switch (tNumComp) {
           case 1:
             FSSource = vtkShaderProgram.substitute(
               FSSource,
               '//VTK::TCoord::Impl',
               [
-                '  vec4 tcolor = textureCube(texture1, tcoordVCVSOutput);',
+                '  vec4 tcolor = texture2D(texture1, tcoordVCVSOutput);',
                 '  ambientColor = ambientColor*tcolor.r;',
                 '  diffuseColor = diffuseColor*tcolor.r;',
               ]
@@ -783,7 +1020,7 @@ function vtkOpenGLPolyDataMapper(publicAPI, model) {
               FSSource,
               '//VTK::TCoord::Impl',
               [
-                '  vec4 tcolor = textureCube(texture1, tcoordVCVSOutput);',
+                '  vec4 tcolor = texture2D(texture1, tcoordVCVSOutput);',
                 '  ambientColor = ambientColor*tcolor.r;',
                 '  diffuseColor = diffuseColor*tcolor.r;',
                 '  opacity = opacity * tcolor.g;',
@@ -795,7 +1032,7 @@ function vtkOpenGLPolyDataMapper(publicAPI, model) {
               FSSource,
               '//VTK::TCoord::Impl',
               [
-                '  vec4 tcolor = textureCube(texture1, tcoordVCVSOutput);',
+                '  vec4 tcolor = texture2D(texture1, tcoordVCVSOutput);',
                 '  ambientColor = ambientColor*tcolor.rgb;',
                 '  diffuseColor = diffuseColor*tcolor.rgb;',
                 '  opacity = opacity * tcolor.a;',
@@ -803,10 +1040,66 @@ function vtkOpenGLPolyDataMapper(publicAPI, model) {
             ).result;
         }
       }
-      shaders.Vertex = VSSource;
-      shaders.Geometry = GSSource;
-      shaders.Fragment = FSSource;
+    } else {
+      VSSource = vtkShaderProgram.substitute(
+        VSSource,
+        '//VTK::TCoord::Dec',
+        'attribute vec3 tcoordMC; varying vec3 tcoordVCVSOutput;'
+      ).result;
+      GSSource = vtkShaderProgram.substitute(GSSource, '//VTK::TCoord::Dec', [
+        'in vec3 tcoordVCVSOutput[];',
+        'out vec3 tcoordVCGSOutput;',
+      ]).result;
+      GSSource = vtkShaderProgram.substitute(
+        GSSource,
+        '//VTK::TCoord::Impl',
+        'tcoordVCGSOutput = tcoordVCVSOutput[i];'
+      ).result;
+      FSSource = vtkShaderProgram.substitute(FSSource, '//VTK::TCoord::Dec', [
+        'varying vec3 tcoordVCVSOutput;',
+        'uniform samplerCube texture1;',
+      ]).result;
+      switch (tNumComp) {
+        case 1:
+          FSSource = vtkShaderProgram.substitute(
+            FSSource,
+            '//VTK::TCoord::Impl',
+            [
+              '  vec4 tcolor = textureCube(texture1, tcoordVCVSOutput);',
+              '  ambientColor = ambientColor*tcolor.r;',
+              '  diffuseColor = diffuseColor*tcolor.r;',
+            ]
+          ).result;
+          break;
+        case 2:
+          FSSource = vtkShaderProgram.substitute(
+            FSSource,
+            '//VTK::TCoord::Impl',
+            [
+              '  vec4 tcolor = textureCube(texture1, tcoordVCVSOutput);',
+              '  ambientColor = ambientColor*tcolor.r;',
+              '  diffuseColor = diffuseColor*tcolor.r;',
+              '  opacity = opacity * tcolor.g;',
+            ]
+          ).result;
+          break;
+        default:
+          FSSource = vtkShaderProgram.substitute(
+            FSSource,
+            '//VTK::TCoord::Impl',
+            [
+              '  vec4 tcolor = textureCube(texture1, tcoordVCVSOutput);',
+              '  ambientColor = ambientColor*tcolor.rgb;',
+              '  diffuseColor = diffuseColor*tcolor.rgb;',
+              '  opacity = opacity * tcolor.a;',
+            ]
+          ).result;
+      }
     }
+
+    shaders.Vertex = VSSource;
+    shaders.Geometry = GSSource;
+    shaders.Fragment = FSSource;
   };
 
   publicAPI.replaceShaderClip = (shaders, ren, actor) => {
@@ -1303,6 +1596,57 @@ function vtkOpenGLPolyDataMapper(publicAPI, model) {
       }
     }
 
+    const ppty = actor.getProperty();
+    const usePBR = ppty.getInterpolation() === Shading.PBR;
+
+    if (usePBR) {
+      const program = cellBO.getProgram();
+      const entries = [
+        ['DiffuseTexture', ppty.getDiffuseTexture?.()],
+        ['ORMTexture', ppty.getORMTexture?.()],
+        ['RMTexture', ppty.getRMTexture?.()],
+        ['RoughnessTexture', ppty.getRoughnessTexture?.()],
+        ['MetallicTexture', ppty.getMetallicTexture?.()],
+        ['AmbientOcclusionTexture', ppty.getAmbientOcclusionTexture?.()],
+        ['EmissionTexture', ppty.getEmissionTexture?.()],
+        ['NormalTexture', ppty.getNormalTexture?.()],
+        ['EnvironmentTexture', ren.getEnvironmentTexture?.()],
+      ];
+
+      entries.forEach(([uniformName, vtkTex]) => {
+        if (!vtkTex || !program.isUniformUsed(uniformName)) {
+          return;
+        }
+
+        let glTex = model.pbrTextures.get(vtkTex);
+        if (!glTex) {
+          glTex = vtkOpenGLTexture.newInstance();
+          glTex.setRenderable(vtkTex);
+          glTex.setOpenGLRenderWindow(model._openGLRenderWindow);
+          model.pbrTextures.set(vtkTex, glTex);
+        }
+
+        glTex.render(model._openGLRenderWindow);
+        program.setUniformi(uniformName, glTex.getTextureUnit());
+      });
+
+      const envTex = ren.getEnvironmentTexture();
+      if (envTex) {
+        if (program.isUniformUsed('environmentTextureDiffuseStrength')) {
+          program.setUniformf(
+            'environmentTextureDiffuseStrength',
+            ren.getEnvironmentTextureDiffuseStrength()
+          );
+        }
+        if (program.isUniformUsed('environmentTextureSpecularStrength')) {
+          program.setUniformf(
+            'environmentTextureSpecularStrength',
+            ren.getEnvironmentTextureSpecularStrength()
+          );
+        }
+      }
+    }
+
     // handle depth requests
     if (model.haveSeenDepthRequest) {
       cellBO
@@ -1565,6 +1909,22 @@ function vtkOpenGLPolyDataMapper(publicAPI, model) {
     program.setUniformf('specularPowerUniform', specularPower);
     program.setUniformf('specular', sIntensity);
 
+    if (program.isUniformUsed('metallicUniform')) {
+      program.setUniformf('metallicUniform', ppty.getMetallic());
+    }
+    if (program.isUniformUsed('roughnessUniform')) {
+      program.setUniformf('roughnessUniform', ppty.getRoughness());
+    }
+    if (program.isUniformUsed('aoStrengthUniform')) {
+      program.setUniformf('aoStrengthUniform', ppty.getOcclusionStrength());
+    }
+    if (program.isUniformUsed('emissionUniform')) {
+      program.setUniformf('emissionUniform', ppty.getEmission());
+    }
+    if (program.isUniformUsed('normalStrengthUniform')) {
+      program.setUniformf('normalStrengthUniform', ppty.getNormalStrength());
+    }
+
     // now set the backface properties if we have them
     if (program.isUniformUsed('ambientIntensityBF')) {
       ppty = actor.getBackfaceProperty();
@@ -1701,6 +2061,14 @@ function vtkOpenGLPolyDataMapper(publicAPI, model) {
     if (model.renderable.getColorTextureMap()) {
       model.internalColorTexture.deactivate();
     }
+    // Release PBR-related textures so that texture units can be reused
+    // for other actors, avoiding exhaustion of hardware texture units
+    // when many PBR textures are present in the scene.
+    if (model.pbrTextures) {
+      model.pbrTextures.forEach((glTex) => {
+        glTex.deactivate();
+      });
+    }
   };
 
   publicAPI.renderPiece = (ren, actor) => {
@@ -1813,11 +2181,14 @@ function vtkOpenGLPolyDataMapper(publicAPI, model) {
     // the input data is clearly one as it can change all four items tcoords may
     // haveTextures or not colors may change based on quite a few mapping
     // parameters in the mapper
-
-    const representation = actor.getProperty().getRepresentation();
+    const ppty = actor.getProperty();
+    const representation = ppty.getRepresentation();
+    const usePBR = ppty.getInterpolation() === Shading.PBR;
 
     let tcoords = poly.getPointData().getTCoords();
-    if (!model.openGLActor.getActiveTextures()) {
+    // Only drop texture coordinates when there are no textures at all and
+    // the actor is not using PBR (which relies on dedicated PBR textures).
+    if (!model.openGLActor.getActiveTextures() && !usePBR) {
       tcoords = null;
     }
 
@@ -1982,6 +2353,7 @@ const DEFAULT_VALUES = {
   selectionStateChanged: null,
   selectionWebGLIdsToVTKIds: null,
   pointPicking: false,
+  pbrTextures: null,
 };
 
 // ----------------------------------------------------------------------------
@@ -2007,6 +2379,7 @@ export function extend(publicAPI, model, initialValues = {}) {
 
   model.tmpMat3 = mat3.identity(new Float64Array(9));
   model.tmpMat4 = mat4.identity(new Float64Array(16));
+  model.pbrTextures = new Map();
 
   for (let i = primTypes.Start; i < primTypes.End; i++) {
     model.primitives[i] = vtkHelper.newInstance();

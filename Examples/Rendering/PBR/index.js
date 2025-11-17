@@ -54,33 +54,37 @@ function hexToRGB(hex) {
       }
     : null;
 }
+
 // Texture loading helper function
 function createTexture(src) {
-  const _img = new Image();
-  _img.crossOrigin = 'Anonymous';
-  _img.src = src;
-  const _tex = vtkTexture.newInstance();
-  _img.onload = () => {
-    _tex.setInterpolate(true);
-    _tex.setEdgeClamp(true);
-    _tex.setImage(_img);
-  };
-  return _tex;
+  const tex = vtkTexture.newInstance();
+  fetch(src)
+    .then((response) => response.blob())
+    .then((blob) => createImageBitmap(blob, { imageOrientation: 'flipY' }))
+    .then((imageBitmap) => {
+      tex.setInterpolate(true);
+      tex.setEdgeClamp(true);
+      tex.setImageBitmap(imageBitmap);
+    });
+
+  return tex;
 }
 
 // Texture loading helper function
 function createTextureWithMipmap(src, level) {
-  const _img = new Image();
-  _img.crossOrigin = 'Anonymous';
-  _img.src = src;
-  const _tex = vtkTexture.newInstance();
-  _tex.setMipLevel(level);
-  _img.onload = () => {
-    _tex.setInterpolate(true);
-    _tex.setEdgeClamp(true);
-    _tex.setImage(_img);
-  };
-  return _tex;
+  const tex = vtkTexture.newInstance();
+  tex.setMipLevel(level);
+
+  fetch(src)
+    .then((response) => response.blob())
+    .then((blob) => createImageBitmap(blob, { imageOrientation: 'flipY' }))
+    .then((imageBitmap) => {
+      tex.setInterpolate(true);
+      tex.setEdgeClamp(true);
+      tex.setImageBitmap(imageBitmap);
+    });
+
+  return tex;
 }
 
 // ---------------------------------
@@ -96,12 +100,13 @@ reader.setUrl(`${__BASE_PATH__}/data/pbr/helmet.obj`).then(() => {
   const polydata = reader.getOutputData(0);
   // Normals
   const normals = vtkPolyDataNormals.newInstance();
-  normals.setInputData(polydata);
+  normals.setInputConnection(polydata);
   // optional recalculation
   // normals.update();
 
   // Setting default values
   actor.setPosition(0.0, 0.0, 0.0);
+  actor.getProperty().setInterpolationToPBR();
   actor.getProperty().setRoughness(1.0);
   actor.getProperty().setEmission(0.6);
   actor.getProperty().setMetallic(1.0);
@@ -135,6 +140,7 @@ reader.setUrl(`${__BASE_PATH__}/data/pbr/helmet.obj`).then(() => {
   mapper.setInputData(polydata);
 
   renderer.addActor(actor);
+  renderer.resetCamera();
   renderWindow.render();
 });
 

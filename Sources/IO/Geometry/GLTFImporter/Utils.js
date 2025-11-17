@@ -92,10 +92,7 @@ export function resolveUrl(url, originalPath) {
 export async function loadImage(image) {
   if (image.bufferView) {
     const blob = new Blob([image.bufferView.data], { type: image.mimeType });
-    const bitmap = await createImageBitmap(blob, {
-      colorSpaceConversion: 'none',
-      imageOrientation: 'flipY',
-    });
+    const bitmap = await createImageBitmap(blob);
     return bitmap;
   }
 

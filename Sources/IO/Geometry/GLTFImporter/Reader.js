@@ -375,6 +375,7 @@ async function createActorFromGTLFNode(worldMatrix) {
   mapper.setInterpolateScalarsBeforeMapping(true);
   actor.setMapper(mapper);
   actor.setUserMatrix(worldMatrix);
+  actor.getProperty().setInterpolationToPBR();
 
   const polydata = vtkPolyData.newInstance();
   mapper.setInputData(polydata);
@@ -394,6 +395,7 @@ async function createActorFromGTLFPrimitive(model, primitive, worldMatrix) {
 
   actor.setMapper(mapper);
   actor.setUserMatrix(worldMatrix);
+  actor.getProperty().setInterpolationToPBR();
 
   const polydata = await createPolyDataFromGLTFMesh(primitive);
   mapper.setInputData(polydata);
