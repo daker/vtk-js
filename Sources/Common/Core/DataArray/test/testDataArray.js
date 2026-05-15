@@ -1,4 +1,4 @@
-import test from 'tape';
+import { it, expect } from 'vitest';
 import vtk from 'vtk.js/Sources/vtk';
 import vtkDataArray from 'vtk.js/Sources/Common/Core/DataArray';
 import { VtkDataTypes } from 'vtk.js/Sources/Common/Core/DataArray/Constants';
@@ -554,30 +554,30 @@ it('Test vtkDataArray resize function', () => {
   );
 });
 
-test('Test vtkDataArray getState preserveTypedArrays option', (t) => {
+it('Test vtkDataArray getState preserveTypedArrays option', () => {
   const values = new Uint8Array([1, 2, 3, 4, 5]);
   const da = vtkDataArray.newInstance({ values });
 
   // Default: values converted to plain Array
   const state = da.getState();
-  t.ok(Array.isArray(state.values), 'default getState returns plain Array');
+  expect(
+    Array.isArray(state.values),
+    'default getState returns plain Array'
+  ).toBeTruthy();
 
   // With option: values preserved as TypedArray
   const transferable = da.getState({ preserveTypedArrays: true });
-  t.ok(
+  expect(
     transferable.values instanceof Uint8Array,
     'TypedArray type is preserved'
-  );
+  ).toBeTruthy();
 
   // Round-trip via vtk() works with TypedArray values
   const da2 = vtk(transferable);
-  t.ok(da2, 'Can reconstruct from state with TypedArray values');
-  t.deepEqual(
+  expect(da2, 'Can reconstruct from state with TypedArray values').toBeTruthy();
+  expect(
     Array.from(da2.getData()),
-    Array.from(values),
     'Values preserved after round-trip'
-  );
-  t.equal(da2.getDataType(), 'Uint8Array', 'Data type preserved');
-
-  t.end();
+  ).toEqual(Array.from(values));
+  expect(da2.getDataType(), 'Data type preserved').toBe('Uint8Array');
 });

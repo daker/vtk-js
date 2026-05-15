@@ -31,26 +31,33 @@ it('Test vtkGenericRenderWindow create/delete', () => {
   const container = document.querySelector('body');
   const images = [];
 
-  function createRW() {
-    const rwContainer = gc.registerDOMElement(document.createElement('div'));
-    container.appendChild(rwContainer);
+  return new Promise((resolve, reject) => {
+    function createRW() {
+      const rwContainer = gc.registerDOMElement(document.createElement('div'));
+      container.appendChild(rwContainer);
 
-    const grw = vtkGenericRenderWindow.newInstance();
-    grw.setContainer(rwContainer);
-    grw.getRenderer().addActor(actor);
+      const grw = vtkGenericRenderWindow.newInstance();
+      grw.setContainer(rwContainer);
+      grw.getRenderer().addActor(actor);
 
-    images.push(grw.getApiSpecificRenderWindow().captureNextImage());
-    grw.getRenderWindow().render();
+      images.push(grw.getApiSpecificRenderWindow().captureNextImage());
+      grw.getRenderWindow().render();
 
-    grw.delete();
+      grw.delete();
 
-    if (images.length < 100) {
-      setTimeout(createRW, 100);
-    } else {
-      popMonitorGLContextCount();
-      Promise.all(images).then(gc.releaseResources);
+      if (images.length < 100) {
+        setTimeout(createRW, 100);
+      } else {
+        popMonitorGLContextCount();
+        Promise.all(images)
+          .then(() => {
+            gc.releaseResources();
+            resolve();
+          })
+          .catch(reject);
+      }
     }
-  }
 
-  createRW();
+    createRW();
+  });
 });

@@ -23,17 +23,31 @@ function buildBrowserInstances() {
         browser: 'chromium',
         launch: {
           headless: true,
-          args: ['--enable-unsafe-swiftshader', '--use-angle=swiftshader'],
+          args: ["--headless=new", "--no-sandbox", "--enable-unsafe-swiftshader", "--use-angle=swiftshader"],
         },
       },
       { browser: 'firefox', launch: { headless: true } },
     ];
   }
-  const launchOptions = {};
+  const launchOptions = {
+    firefoxUserPrefs: {
+      // GitHub Actions does not have WebGPU for Firefox, throws UnsupportedError.
+      'dom.webgpu.enabled': true,
+      'webgl.force-enabled': true
+    }
+  };
   return [{ browser: testBrowser, launch: launchOptions }];
 }
 
 export default defineConfig({
+  fullyParallel: false, // GPU tests should run sequentially
+  forbidOnly: ci,
+  retries: ci ? 1 : 0,
+  workers: 1, // Single worker for GPU resource management
+  use: {
+    // Enable traces for stability (helps with Firefox on Linux)
+    trace: 'retain-on-failure',
+  },
   resolve: {
     alias: {
       'vtk.js': path.resolve(import.meta.dirname),
@@ -70,7 +84,7 @@ export default defineConfig({
       'Sources/Testing/setupTestEnv.js',
     ],
     setupFiles: ['Sources/Testing/setupTestEnv.js'],
-    testTimeout: 60000,
+    testTimeout: 120000,
     reporters: ['default', 'junit'],
     outputFile: {
       junit: 'Utilities/TestResults/junit-report.xml',

@@ -139,12 +139,12 @@ serve the "AR" example over a self-signed HTTPS connection:
 path/to/vtk-js> npm run example:https -- AR
 ...
 VITE vX.Y.Z  ready in XXX ms
-➜  Local:   https://localhost:3000/
-➜  Network: https://xxx.xxx.xxx.xxx:3000/
+➜  Local:   https://localhost:9999/
+➜  Network: https://xxx.xxx.xxx.xxx:9999/
 ```
 
 The example can then be launched on the WebXR device by navigating in a compatible browser to the
-address given at `https://xxx.xxx.xxx.xxx:3000` in the output.
+address given at `https://xxx.xxx.xxx.xxx:9999` in the output.
 
 ### Emulating XR Hardware
 

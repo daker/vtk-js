@@ -64,5 +64,5 @@ $ npm run example -- ConeSource
 Then the example could be seen at the following URL where standard debug tools could be used within your browser:
 
 ```sh
-http://localhost:3000/
+http://localhost:9999/
 ```

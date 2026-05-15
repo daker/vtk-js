@@ -251,6 +251,47 @@ function cleanupPlugin(outputDir) {
   };
 }
 
+function inlineUmdCssPlugin() {
+  return {
+    name: 'vtk-inline-umd-css',
+    generateBundle(_, bundle) {
+      const cssAssets = Object.entries(bundle).filter(
+        ([, item]) => item.type === 'asset' && item.fileName.endsWith('.css')
+      );
+      if (!cssAssets.length) {
+        return;
+      }
+
+      const umdChunk = Object.values(bundle).find(
+        (item) => item.type === 'chunk' && item.fileName === 'vtk.js'
+      );
+      if (!umdChunk) {
+        return;
+      }
+
+      const cssText = cssAssets
+        .map(([, item]) => String(item.source))
+        .filter(Boolean)
+        .join('\n');
+      if (!cssText) {
+        return;
+      }
+
+      const cssPayload = JSON.stringify(cssText);
+      umdChunk.code =
+        `;(function(){if(typeof document==='undefined'){return;}var css=${cssPayload};` +
+        `if(!css){return;}var style=document.createElement('style');` +
+        `style.setAttribute('type','text/css');style.appendChild(document.createTextNode(css));` +
+        `(document.head||document.getElementsByTagName('head')[0]).appendChild(style);}());\n` +
+        umdChunk.code;
+
+      cssAssets.forEach(([fileName]) => {
+        delete bundle[fileName];
+      });
+    },
+  };
+}
+
 function createSharedConfig() {
   return {
     resolve: {
@@ -354,6 +395,7 @@ function createUmdConfig() {
       glslPlugin(),
       svgRawPlugin(),
       ignorePlugin(['crypto']),
+      inlineUmdCssPlugin(),
       copyUmdAssetsPlugin(),
       cleanupPlugin(umdOutputDir),
     ],

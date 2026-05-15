@@ -37,11 +37,7 @@ it.skipIf(__VTK_TEST_NO_WEBGL__)(
     const bigPolydata = gc.registerResource(vtkPolyData.newInstance());
     const numberOfVerts = 17_000_000;
     // Points of the triangle
-    const pointsData = Float32Array.from([
-      ...[0, 0, 0],
-      ...[1, 0, 0], // This point will be also for verts
-      ...[0.5, 0.7, 0],
-    ]);
+    const pointsData = Float32Array.from([0, 0, 0, 1, 0, 0, 0.5, 0.7, 0]);
     bigPolydata.getPoints().setData(pointsData, 3);
     // The triangle cell
     const polysData = Uint32Array.from([3, 0, 1, 2]);
