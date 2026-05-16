@@ -1,6 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+function stripQueryAndHash(id) {
+  return id.replace(/[?#].*$/, '');
+}
+
 /**
  * Load .glsl files as raw strings.
  */
@@ -8,8 +12,9 @@ export function glslPlugin() {
   return {
     name: 'vtk-glsl',
     load(id) {
-      if (id.endsWith('.glsl')) {
-        const content = fs.readFileSync(id, 'utf-8');
+      const fileId = stripQueryAndHash(id);
+      if (fileId.endsWith('.glsl')) {
+        const content = fs.readFileSync(fileId, 'utf-8');
         return {
           code: `export default ${JSON.stringify(content)};`,
           moduleType: 'js',
@@ -23,11 +28,34 @@ export function glslPlugin() {
  * Load .svg files as raw strings.
  */
 export function svgRawPlugin() {
+  const VIRTUAL_PREFIX = '\0vtk-svg-raw:';
+
   return {
     name: 'vtk-svg-raw',
+    enforce: 'pre',
+    async resolveId(source, importer, options) {
+      if (!source.endsWith('.svg') || source.includes('?')) {
+        return null;
+      }
+
+      const resolved = await this.resolve(source, importer, {
+        ...options,
+        skipSelf: true,
+      });
+      if (!resolved) {
+        return null;
+      }
+
+      return `${VIRTUAL_PREFIX}${resolved.id}`;
+    },
     load(id) {
-      if (id.endsWith('.svg')) {
-        const content = fs.readFileSync(id, 'utf-8');
+      if (!id.startsWith(VIRTUAL_PREFIX)) {
+        return null;
+      }
+
+      const fileId = stripQueryAndHash(id.slice(VIRTUAL_PREFIX.length));
+      if (fileId.endsWith('.svg')) {
+        const content = fs.readFileSync(fileId, 'utf-8');
         return {
           code: `export default ${JSON.stringify(content)};`,
           moduleType: 'js',
@@ -44,8 +72,9 @@ export function cjsonPlugin() {
   return {
     name: 'vtk-cjson',
     load(id) {
-      if (id.endsWith('.cjson')) {
-        const content = fs.readFileSync(id, 'utf-8');
+      const fileId = stripQueryAndHash(id);
+      if (fileId.endsWith('.cjson')) {
+        const content = fs.readFileSync(fileId, 'utf-8');
         return {
           code: `export default ${content};`,
           moduleType: 'js',
@@ -114,4 +143,24 @@ export function serveStaticDataPlugin(rootDir) {
       });
     },
   };
+}
+
+export function createVtkPlugins({
+  includeCjson = false,
+  includeStaticData = false,
+  staticDataRootDir,
+} = {}) {
+  const plugins = [workerInlinePlugin(), glslPlugin(), svgRawPlugin()];
+
+  if (includeCjson) {
+    plugins.push(cjsonPlugin());
+  }
+
+  plugins.push(ignorePlugin(['crypto']));
+
+  if (includeStaticData && staticDataRootDir) {
+    plugins.push(serveStaticDataPlugin(staticDataRootDir));
+  }
+
+  return plugins;
 }

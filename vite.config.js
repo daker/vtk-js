@@ -2,14 +2,8 @@ import { defineConfig } from 'vite';
 import * as path from 'path';
 import * as fs from 'fs';
 import glob from 'glob';
-import {
-  glslPlugin,
-  svgRawPlugin,
-  workerInlinePlugin,
-  ignorePlugin,
-} from './Utilities/rollup/plugins.js';
-
 import rewriteImports from './Utilities/build/rewrite-imports.js';
+import { createVtkPlugins } from './Utilities/build/plugins.mjs';
 
 const pkgJSON = JSON.parse(fs.readFileSync('./package.json', 'utf-8'));
 const projectRoot = path.resolve('.');
@@ -41,6 +35,32 @@ function copyDir(src, dest) {
       fs.copyFileSync(srcPath, destPath);
     }
   }
+}
+
+function copyRootFiles(outputDir, patterns = ['*.txt', '*.md']) {
+  patterns.forEach((pattern) => {
+    for (const file of glob.sync(pattern)) {
+      fs.copyFileSync(file, path.join(outputDir, file));
+    }
+  });
+}
+
+function copyCommonPackageAssets(outputDir) {
+  copyRootFiles(outputDir);
+  if (fs.existsSync('.npmignore')) {
+    fs.copyFileSync('.npmignore', path.join(outputDir, '.npmignore'));
+  }
+  fs.copyFileSync('LICENSE', path.join(outputDir, 'LICENSE'));
+}
+
+function writePackageManifest(outputDir, transformPkg) {
+  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
+  transformPkg(pkg);
+  fs.writeFileSync(path.join(outputDir, 'package.json'), JSON.stringify(pkg, null, 2));
+}
+
+function rewriteDtsContent(file, rewriter) {
+  return rewriteImports(fs.readFileSync(file, 'utf-8'), rewriter);
 }
 
 const entryPoints = [
@@ -77,8 +97,7 @@ function copyEsmAssetsPlugin() {
             `${moduleName}.d.ts`
           );
 
-          let content = fs.readFileSync(file, 'utf-8');
-          content = rewriteImports(content, (relImport) => {
+          const content = rewriteDtsContent(file, (relImport) => {
             const baseDir = dirname;
 
             if (relImport === '..') {
@@ -112,28 +131,15 @@ function copyEsmAssetsPlugin() {
       fs.copyFileSync('Utilities/build/macro-shim.d.ts', `${esmOutputDir}/macro.d.ts`);
       fs.copyFileSync('Utilities/build/macro-shim.js', `${esmOutputDir}/macro.js`);
 
-      for (const f of glob.sync('*.txt')) {
-        fs.copyFileSync(f, `${esmOutputDir}/${f}`);
-      }
-      for (const f of glob.sync('*.md')) {
-        fs.copyFileSync(f, `${esmOutputDir}/${f}`);
-      }
+      copyCommonPackageAssets(esmOutputDir);
       fs.copyFileSync('tsconfig.json', `${esmOutputDir}/tsconfig.json`);
-      if (fs.existsSync('.npmignore')) {
-        fs.copyFileSync('.npmignore', `${esmOutputDir}/.npmignore`);
-      }
-      fs.copyFileSync('LICENSE', `${esmOutputDir}/LICENSE`);
-
-      const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
-      pkg.name = '@kitware/vtk.js';
-      pkg.type = 'module';
-      pkg.main = './index.js';
-      pkg.module = './index.js';
-      pkg.types = './index.d.ts';
-      fs.writeFileSync(
-        `${esmOutputDir}/package.json`,
-        JSON.stringify(pkg, null, 2)
-      );
+      writePackageManifest(esmOutputDir, (pkg) => {
+        pkg.name = '@kitware/vtk.js';
+        pkg.type = 'module';
+        pkg.main = './index.js';
+        pkg.module = './index.js';
+        pkg.types = './index.d.ts';
+      });
     },
   };
 }
@@ -151,7 +157,7 @@ function copyUmdAssetsPlugin() {
         fs.mkdirSync(path.dirname(destPath), { recursive: true });
 
         if (file.endsWith('.d.ts')) {
-          const content = rewriteImports(fs.readFileSync(file, 'utf-8'), (relImport) => {
+          const content = rewriteDtsContent(file, (relImport) => {
             const importPath = path.join(path.dirname(file), relImport);
             return path.join('vtk.js', path.relative(projectRoot, importPath)).replace(/\\/g, '/');
           });
@@ -176,27 +182,14 @@ function copyUmdAssetsPlugin() {
         `${umdOutputDir}/Sources/macro.js`
       );
 
-      for (const f of glob.sync('*.txt')) {
-        fs.copyFileSync(f, `${umdOutputDir}/${f}`);
-      }
-      for (const f of glob.sync('*.md')) {
-        fs.copyFileSync(f, `${umdOutputDir}/${f}`);
-      }
-      if (fs.existsSync('.npmignore')) {
-        fs.copyFileSync('.npmignore', `${umdOutputDir}/.npmignore`);
-      }
-      fs.copyFileSync('LICENSE', `${umdOutputDir}/LICENSE`);
-
-      const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
-      pkg.name = 'vtk.js';
-      pkg.main = './vtk.js';
-      delete pkg.module;
-      delete pkg.type;
-      delete pkg.types;
-      fs.writeFileSync(
-        `${umdOutputDir}/package.json`,
-        JSON.stringify(pkg, null, 2)
-      );
+      copyCommonPackageAssets(umdOutputDir);
+      writePackageManifest(umdOutputDir, (pkg) => {
+        pkg.name = 'vtk.js';
+        pkg.main = './vtk.js';
+        delete pkg.module;
+        delete pkg.type;
+        delete pkg.types;
+      });
     },
   };
 }
@@ -356,10 +349,7 @@ function createEsmConfig() {
       },
     },
     plugins: [
-      workerInlinePlugin(),
-      glslPlugin(),
-      svgRawPlugin(),
-      ignorePlugin(['crypto']),
+      ...createVtkPlugins(),
       copyEsmAssetsPlugin(),
       generateDtsReferencesPlugin(),
       cleanupPlugin(esmOutputDir),
@@ -391,10 +381,7 @@ function createUmdConfig() {
       },
     },
     plugins: [
-      workerInlinePlugin(),
-      glslPlugin(),
-      svgRawPlugin(),
-      ignorePlugin(['crypto']),
+      ...createVtkPlugins(),
       inlineUmdCssPlugin(),
       copyUmdAssetsPlugin(),
       cleanupPlugin(umdOutputDir),

@@ -25,12 +25,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Setup node
-        uses: actions/setup-node@v4
+      - name: Setup project
+        uses: ./.github/actions/setup-node-project
         with:
-          node-version: 22
-      - name: Install dependencies
-        run: npm ci
+          node-version: '22'
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium firefox
       - name: Build
@@ -72,22 +70,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Setup node
-        uses: actions/setup-node@v4
+      - name: Setup project
+        uses: ./.github/actions/setup-node-project
         with:
-          node-version: 22
-      - name: Install dependencies
-        run: npm ci
+          node-version: '22'
       - name: Build
         run: npm run build:release
-      - name: Generate API docs
-        run: npm run docs:generate-api
-      - name: Generate docs examples
-        run: npm run docs:generate-examples
-      - name: Generate docs sidebar
-        run: npm run docs:generate-sidebar
-      - name: Generate docs gallery
-        run: npm run docs:generate-gallery
+      - name: Generate docs content
+        run: npm run docs:generate
       - name: Build docs
         run: npm run docs:build
       - name: Build docs examples

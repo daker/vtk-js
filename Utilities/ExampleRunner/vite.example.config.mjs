@@ -7,7 +7,7 @@ import {
   workerInlinePlugin,
   ignorePlugin,
   serveStaticDataPlugin,
-} from '../rollup/plugins.js';
+} from '../build/plugins.mjs';
 
 const repoRoot = process.env.EXAMPLE_REPO_ROOT || path.resolve(__dirname, '../..');
 const exampleEntry = process.env.EXAMPLE_ENTRY;

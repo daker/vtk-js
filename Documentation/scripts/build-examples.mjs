@@ -2,23 +2,11 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { build as viteBuild } from 'vite';
 
-import { rollup } from 'rollup';
-
-import terser from '@rollup/plugin-terser';
-import alias from '@rollup/plugin-alias';
-import commonjs from '@rollup/plugin-commonjs';
-import json from '@rollup/plugin-json';
-import { nodeResolve } from '@rollup/plugin-node-resolve';
-import { babel } from '@rollup/plugin-babel';
-import ignore from 'rollup-plugin-ignore';
-import nodePolyfills from 'rollup-plugin-polyfill-node';
-import postcss from 'rollup-plugin-postcss';
-import svgo from 'rollup-plugin-svgo';
-import webworkerLoader from 'rollup-plugin-web-worker-loader';
-import { string } from 'rollup-plugin-string';
-import autoprefixer from 'autoprefixer';
+import { createVtkPlugins } from '../../Utilities/build/plugins.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,7 +47,9 @@ function buildHtml(
     exampleScript = `<script type="module" src="${bundleFile}"></script>`;
   }
   if (inlineScript) {
-    exampleScript = `<script>${inlineScript}</script>`;
+    exampleScript = isModule
+      ? `<script type="module">${inlineScript}</script>`
+      : `<script>${inlineScript}</script>`;
   }
 
   return `<!doctype html>
@@ -90,7 +80,9 @@ async function walkExamples(config, dir = config.root, results = []) {
     entries.map(async (entry) => {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        const relDir = path.relative(config.root, fullPath).replace(/\\/g, '/');
+        const relDir = path
+          .relative(config.root, fullPath)
+          .replace(/\\/g, '/');
         if (relDir && config.shouldSkipDir(relDir)) {
           return;
         }
@@ -139,101 +131,185 @@ function toDataUri(filePath, source) {
   return `data:${getMimeType(filePath)};base64,${source.toString('base64')}`;
 }
 
-function assetLoader({ inline = false } = {}) {
-  const assetRegex = /\.(png|jpe?g)$/i;
-
-  return {
-    name: inline ? 'asset-loader-inline' : 'asset-loader',
-    async load(id) {
-      if (!assetRegex.test(id)) {
-        return null;
-      }
-
-      const source = await fs.readFile(id);
-      if (inline) {
-        return `export default ${JSON.stringify(toDataUri(id, source))};`;
-      }
-      const refId = this.emitFile({
-        type: 'asset',
-        name: path.basename(id),
-        source,
-      });
-
-      return `export default import.meta.ROLLUP_FILE_URL_${refId};`;
-    },
-  };
-}
-
-function replaceBasePath(basePath) {
-  return {
-    name: 'replace-base-path',
-    transform(code, id) {
-      if (!id.endsWith('.js')) {
-        return null;
-      }
-
-      if (!code.includes('__BASE_PATH__')) {
-        return null;
-      }
-
-      return {
-        code: code.replace(/\b__BASE_PATH__\b/g, JSON.stringify(basePath)),
-        map: null,
-      };
-    },
-  };
-}
-
-function inlineCssUrls() {
-  const cssFileRegex = /\.css$/i;
+/**
+ * Inline CSS url() references as data URIs.
+ * Required because cssRuntimePlugin converts CSS to JS strings,
+ * so relative url() paths would no longer resolve at runtime.
+ */
+async function inlineCssAssetUrls(code, id) {
   const urlRegex = /url\((['"]?)([^'")]+)\1\)/g;
-  return {
-    name: 'inline-css-urls',
-    async transform(code, id) {
-      if (!cssFileRegex.test(id)) {
-        return null;
+  const matches = Array.from(code.matchAll(urlRegex));
+  if (!matches.length) {
+    return code;
+  }
+
+  const replacements = await Promise.all(
+    matches.map(async ([fullMatch, quote, rawUrl]) => {
+      const assetUrl = rawUrl.trim();
+      if (
+        assetUrl.startsWith('data:') ||
+        assetUrl.startsWith('http://') ||
+        assetUrl.startsWith('https://') ||
+        assetUrl.startsWith('//')
+      ) {
+        return { fullMatch, replacement: fullMatch };
       }
 
-      const matches = Array.from(code.matchAll(urlRegex));
-      if (!matches.length) {
-        return null;
+      const assetPath = path.resolve(path.dirname(id), assetUrl);
+      try {
+        const source = await fs.readFile(assetPath);
+        const dataUrl = toDataUri(assetPath, source);
+        return {
+          fullMatch,
+          replacement: `url(${quote}${dataUrl}${quote})`,
+        };
+      } catch (err) {
+        return { fullMatch, replacement: fullMatch };
+      }
+    })
+  );
+
+  let transformed = code;
+  replacements.forEach(({ fullMatch, replacement }) => {
+    transformed = transformed.replace(fullMatch, replacement);
+  });
+  return transformed;
+}
+
+/**
+ * Convert CSS imports to JS that injects <style> tags at runtime.
+ * Needed so standalone example HTML files work with a single <script> tag.
+ */
+function cssRuntimePlugin() {
+  const cssFileRegex = /\.css$/i;
+  const cssModuleRegex = /\.module\.css$/i;
+  const VIRTUAL_PREFIX = '\0vtk-css-runtime:';
+  const classNameRegex = /\.([A-Za-z_][\w-]*)/g;
+
+  function toCamelCase(value) {
+    return value.replace(/-+([a-zA-Z0-9])/g, (_, c) => c.toUpperCase());
+  }
+
+  function transformCssModule(css, fileId) {
+    const fileBase = path
+      .basename(fileId, '.css')
+      .replace(/\./g, '-')
+      .replace(/[^A-Za-z0-9_-]/g, '_');
+    const classMap = {};
+    const composesMap = {};
+
+    for (const match of css.matchAll(classNameRegex)) {
+      const original = match[1];
+      if (classMap[original]) {
+        continue;
       }
 
-      const replacements = await Promise.all(
-        matches.map(async ([fullMatch, quote, rawUrl]) => {
-          const assetUrl = rawUrl.trim();
-          if (
-            assetUrl.startsWith('data:') ||
-            assetUrl.startsWith('http://') ||
-            assetUrl.startsWith('https://') ||
-            assetUrl.startsWith('//')
-          ) {
-            return { fullMatch, replacement: fullMatch };
-          }
+      const hash = crypto
+        .createHash('sha256')
+        .update(`${fileId}:${original}`)
+        .digest('base64url')
+        .slice(0, 5);
+      classMap[original] = `${fileBase}_${original}_${hash}`;
+    }
 
-          const assetPath = path.resolve(path.dirname(id), assetUrl);
-          try {
-            const source = await fs.readFile(assetPath);
-            const dataUrl = toDataUri(assetPath, source);
-            return {
-              fullMatch,
-              replacement: `url(${quote}${dataUrl}${quote})`,
-            };
-          } catch (err) {
-            return { fullMatch, replacement: fullMatch };
+    const ruleRegex = /\.([A-Za-z_][\w-]*)\s*\{([^}]*)\}/g;
+    for (const [, ownerClass, ruleBody] of css.matchAll(ruleRegex)) {
+      const composedClasses = [];
+      const composesRegex = /composes:\s*([^;]+);/g;
+      for (const [, composesValue] of ruleBody.matchAll(composesRegex)) {
+        const localNames = composesValue
+          .split(/\s+/)
+          .map((v) => v.trim())
+          .filter((v) => v && v !== 'from' && !v.startsWith("'") && !v.startsWith('"'));
+        localNames.forEach((name) => {
+          if (classMap[name] && name !== ownerClass) {
+            composedClasses.push(name);
           }
-        })
+        });
+      }
+      if (composedClasses.length) {
+        composesMap[ownerClass] = [...new Set(composedClasses)];
+      }
+    }
+
+    let transformedCss = css.replace(/composes:\s*[^;]+;/g, '');
+    const escapedKeys = Object.keys(classMap).sort((a, b) => b.length - a.length);
+    escapedKeys.forEach((original) => {
+      const escaped = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      transformedCss = transformedCss.replace(
+        new RegExp(`\\.${escaped}(?![\\w-])`, 'g'),
+        `.${classMap[original]}`
       );
+    });
 
-      let transformed = code;
-      replacements.forEach(({ fullMatch, replacement }) => {
-        transformed = transformed.replace(fullMatch, replacement);
-      });
+    const moduleMap = {};
+    const resolveComposed = (className, seen = new Set()) => {
+      if (seen.has(className)) return [];
+      seen.add(className);
+      const direct = composesMap[className] || [];
+      return direct.flatMap((dep) => [dep, ...resolveComposed(dep, seen)]);
+    };
 
-      return {
-        code: transformed,
-        map: null,
-      };
+    Object.entries(classMap).forEach(([original, scoped]) => {
+      const composedScoped = resolveComposed(original)
+        .map((name) => classMap[name])
+        .filter(Boolean);
+      const exportValue = [scoped, ...composedScoped].join(' ');
+      moduleMap[original] = exportValue;
+      moduleMap[toCamelCase(original)] = exportValue;
+    });
+
+    return { css: transformedCss, moduleMap };
+  }
+
+  return {
+    name: 'vtk-css-runtime',
+    enforce: 'pre',
+    async resolveId(source, importer) {
+      if (!cssFileRegex.test(source)) {
+        return null;
+      }
+
+      const resolved = await this.resolve(source, importer, { skipSelf: true });
+      if (!resolved) {
+        return null;
+      }
+
+      return `${VIRTUAL_PREFIX}${Buffer.from(resolved.id).toString('base64url')}`;
+    },
+    async load(id) {
+      if (!id.startsWith(VIRTUAL_PREFIX)) {
+        return null;
+      }
+
+      const fileId = Buffer.from(
+        id.slice(VIRTUAL_PREFIX.length),
+        'base64url'
+      ).toString('utf8');
+      const rawCss = await fs.readFile(fileId, 'utf8');
+      const inlinedCss = await inlineCssAssetUrls(rawCss, fileId);
+      const styleId = `vtk-css:${path
+        .relative(REPO_ROOT, fileId)
+        .replace(/\\/g, '/')}`;
+      let css = inlinedCss;
+      let moduleMap = {};
+
+      if (cssModuleRegex.test(fileId)) {
+        const transformed = transformCssModule(inlinedCss, fileId);
+        css = transformed.css;
+        moduleMap = transformed.moduleMap;
+      }
+
+      return `
+const css = ${JSON.stringify(css)};
+if (typeof document !== 'undefined' && !document.querySelector('style[data-vtk-css-id="${styleId}"]')) {
+  const style = document.createElement('style');
+  style.setAttribute('data-vtk-css-id', ${JSON.stringify(styleId)});
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+export default ${JSON.stringify(moduleMap)};
+`;
     },
   };
 }
@@ -270,76 +346,40 @@ async function copyApplicationStaticAssets(entryPath, outDir) {
   );
 }
 
+/**
+ * Shared Vite config for building doc examples.
+ */
+function createSharedViteConfig() {
+  return {
+    configFile: false,
+    root: REPO_ROOT,
+    logLevel: 'warn',
+    resolve: {
+      alias: {
+        '@kitware/vtk.js': path.resolve(REPO_ROOT, 'Sources'),
+        'vtk.js': REPO_ROOT,
+      },
+    },
+    define: {
+      __BASE_PATH__: JSON.stringify('/vtk-js'),
+    },
+    css: {
+      modules: {
+        localsConvention: 'camelCaseOnly',
+      },
+    },
+  };
+}
+
+function createExamplePlugins() {
+  return [...createVtkPlugins({ includeCjson: true }), cssRuntimePlugin()];
+}
+
 async function build() {
   const entries = await collectEntries();
   const distDir = path.resolve(DOCS_ROOT, '.vitepress', 'dist', 'examples');
 
   await fs.mkdir(distDir, { recursive: true });
-
-  const aliasPlugin = alias.default ? alias.default : alias;
-  const commonjsPlugin = commonjs.default ? commonjs.default : commonjs;
-  const jsonPlugin = json.default ? json.default : json;
-  const nodePolyfillsPlugin = nodePolyfills.default
-    ? nodePolyfills.default
-    : nodePolyfills;
-  const postcssPlugin = postcss.default ? postcss.default : postcss;
-  const svgoPlugin = svgo.default ? svgo.default : svgo;
-  const webworkerPlugin = webworkerLoader.default
-    ? webworkerLoader.default
-    : webworkerLoader;
-  const stringPlugin = string.default ? string.default : string;
-  const ignorePlugin = ignore.default ? ignore.default : ignore;
-
-  function createPlugins({ forInlineIife = false } = {}) {
-    return [
-      aliasPlugin({
-        entries: [
-          {
-            find: '@kitware/vtk.js',
-            replacement: path.resolve(REPO_ROOT, 'Sources'),
-          },
-          { find: 'vtk.js', replacement: REPO_ROOT },
-        ],
-      }),
-      ignorePlugin(['crypto']),
-      ...(forInlineIife ? [inlineCssUrls(), terser()] : []),
-      webworkerPlugin({
-        targetPlatform: 'browser',
-        pattern: /^.+\.worker(?:\.js)?$/,
-        external: [],
-        inline: true,
-        preserveSource: true,
-      }),
-      nodeResolve({
-        preferBuiltins: false,
-        browser: true,
-      }),
-      commonjsPlugin({
-        transformMixedEsModules: true,
-      }),
-      nodePolyfillsPlugin(),
-      babel({
-        include: ['Sources/**', 'Examples/**'],
-        exclude: 'node_modules/**',
-        extensions: ['.js'],
-        babelHelpers: 'runtime',
-      }),
-      stringPlugin({
-        include: ['**/*.glsl', '**/*.svg'],
-      }),
-      jsonPlugin(),
-      svgoPlugin(),
-      postcssPlugin({
-        inject: true,
-        modules: {
-          auto: /\.module\.css$/i,
-        },
-        plugins: [autoprefixer],
-      }),
-      assetLoader({ inline: forInlineIife }),
-      replaceBasePath('/vtk-js'),
-    ];
-  }
 
   const applicationEntries = {};
   const esEntries = {};
@@ -354,20 +394,26 @@ async function build() {
     }
   });
 
+  // Build ES module examples
   if (Object.keys(esEntries).length) {
-    const esBundle = await rollup({
-      input: esEntries,
-      plugins: createPlugins(),
+    await viteBuild({
+      ...createSharedViteConfig(),
+      plugins: createExamplePlugins(),
+      build: {
+        outDir: distDir,
+        emptyOutDir: false,
+        minify: false,
+        rollupOptions: {
+          input: esEntries,
+          output: {
+            format: 'es',
+            entryFileNames: '[name]/index.js',
+            chunkFileNames: '_shared/[name]-[hash].js',
+            assetFileNames: '_assets/[name]-[hash][extname]',
+          },
+        },
+      },
     });
-
-    await esBundle.write({
-      dir: distDir,
-      format: 'es',
-      entryFileNames: '[name]/index.js',
-      chunkFileNames: '_shared/[name]-[hash].js',
-      assetFileNames: '_assets/[name]-[hash][extname]',
-    });
-    await esBundle.close();
 
     await Promise.all(
       Object.entries(esEntries).map(async ([chunkName, entryPath]) => {
@@ -378,53 +424,54 @@ async function build() {
     );
   }
 
-  await Object.entries(applicationEntries).reduce(
-    (chain, [chunkName, entryPath]) =>
-      chain.then(async () => {
-        const outDir = path.resolve(distDir, chunkName);
+  // Build Application examples (single file inline bundles)
+  for (const [chunkName, entryPath] of Object.entries(applicationEntries)) {
+    const outDir = path.resolve(distDir, chunkName);
+    await fs.mkdir(outDir, { recursive: true });
 
-        await fs.mkdir(outDir, { recursive: true });
-        const bundle = await rollup({
+    const result = await viteBuild({
+      ...createSharedViteConfig(),
+      plugins: createExamplePlugins(),
+      build: {
+        write: false,
+        minify: false,
+        assetsInlineLimit: Infinity,
+        rollupOptions: {
           input: entryPath,
-          plugins: createPlugins({ forInlineIife: true }),
-        });
-        const { output } = await bundle.generate({
-          format: 'iife',
-          name: `${chunkName.replace(/[^\w$]/g, '_')}`,
-          inlineDynamicImports: true,
-        });
-        await bundle.close();
+          output: {
+            format: 'es',
+            codeSplitting: false,
+          },
+        },
+      },
+    });
 
-        const appChunk = output.find((item) => item.type === 'chunk');
-        if (!appChunk) {
-          throw new Error(`Failed to generate inline IIFE for ${chunkName}`);
-        }
-        const inlineScript = appChunk.code.replace(
-          /<\/script>/gi,
-          '<\\/script>'
-        );
-        await fs.writeFile(
-          path.resolve(outDir, 'index.html'),
-          buildHtml(chunkName, './index.js', false, inlineScript),
-          'utf8'
-        );
-      }),
-    Promise.resolve()
-  );
+    const output = Array.isArray(result) ? result[0].output : result.output;
+    const appChunk = output.find((item) => item.type === 'chunk');
+    if (!appChunk) {
+      throw new Error(`Failed to generate inline module for ${chunkName}`);
+    }
 
+    const inlineScript = appChunk.code.replace(/<\/script>/gi, '<\\/script>');
+    await fs.writeFile(
+      path.resolve(outDir, 'index.html'),
+      buildHtml(chunkName, './index.js', true, inlineScript),
+      'utf8'
+    );
+  }
+
+  // Write HTML wrappers for ES module examples
   await Promise.all(
     Object.keys(entries).map(async (chunkName) => {
-      const outDir = path.resolve(distDir, chunkName);
-      const bundleFile = './index.js';
-      const isModule = !Object.hasOwn(applicationEntries, chunkName);
-      if (!isModule) {
+      if (Object.hasOwn(applicationEntries, chunkName)) {
         return;
       }
 
+      const outDir = path.resolve(distDir, chunkName);
       await fs.mkdir(outDir, { recursive: true });
       await fs.writeFile(
         path.resolve(outDir, 'index.html'),
-        buildHtml(chunkName, bundleFile, isModule),
+        buildHtml(chunkName, './index.js', true),
         'utf8'
       );
     })

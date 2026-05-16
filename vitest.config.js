@@ -1,14 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 import path from 'path';
-import {
-  glslPlugin,
-  svgRawPlugin,
-  cjsonPlugin,
-  workerInlinePlugin,
-  ignorePlugin,
-  serveStaticDataPlugin,
-} from './Utilities/rollup/plugins.js';
+import { createVtkPlugins } from './Utilities/build/plugins.mjs';
 
 const noWebGL = !!process.env.NO_WEBGL;
 const webGPU = !!process.env.WEBGPU;
@@ -67,14 +60,11 @@ export default defineConfig({
     __VTK_TEST_WEBGPU__: JSON.stringify(webGPU),
     global: 'globalThis',
   },
-  plugins: [
-    workerInlinePlugin(),
-    glslPlugin(),
-    svgRawPlugin(),
-    cjsonPlugin(),
-    ignorePlugin(['crypto']),
-    serveStaticDataPlugin(import.meta.dirname),
-  ],
+  plugins: createVtkPlugins({
+    includeCjson: true,
+    includeStaticData: true,
+    staticDataRootDir: import.meta.dirname,
+  }),
   test: {
     include: ['Sources/**/test*.js'],
     exclude: [

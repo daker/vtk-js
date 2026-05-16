@@ -1,0 +1,17 @@
+name: Setup Node Project
+description: Setup Node and install dependencies with npm ci
+inputs:
+  node-version:
+    description: Node.js version
+    required: false
+    default: '22'
+runs:
+  using: composite
+  steps:
+    - name: Setup node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
