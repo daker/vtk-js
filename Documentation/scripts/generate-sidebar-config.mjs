@@ -58,8 +58,8 @@ const docsMenu = [
   {
     text: 'Testing',
     items: [
-      { text: 'Tests', link: '/vtk-js/coverage/tests.html' },
-      { text: 'Coverage', link: '/vtk-js/coverage/home.html' },
+      { text: 'Tests', link: '/coverage/tests.html' },
+      { text: 'Coverage', link: '/coverage/home.html' },
     ],
   },
 ];
