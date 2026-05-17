@@ -329,7 +329,6 @@ function createEsmConfig() {
         ],
         output: {
           format: 'es',
-          compact: false,
           preserveModules: true,
           preserveModulesRoot: 'Sources',
           entryFileNames(chunkInfo) {
