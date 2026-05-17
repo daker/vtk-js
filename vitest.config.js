@@ -33,14 +33,6 @@ function buildBrowserInstances() {
 }
 
 export default defineConfig({
-  fullyParallel: false, // GPU tests should run sequentially
-  forbidOnly: ci,
-  retries: ci ? 1 : 0,
-  workers: 1, // Single worker for GPU resource management
-  use: {
-    // Enable traces for stability (helps with Firefox on Linux)
-    trace: 'retain-on-failure',
-  },
   resolve: {
     alias: {
       'vtk.js': path.resolve(import.meta.dirname),
@@ -79,6 +71,10 @@ export default defineConfig({
     outputFile: {
       junit: 'Utilities/TestResults/junit-report.xml',
     },
+    fileParallelism: false, // GPU tests should run sequentially
+    maxWorkers: 1, // Single worker for GPU resource management
+    retry: ci ? 1 : 0,
+    allowOnly: !ci,
     browser: {
       enabled: true,
       provider: playwright(),
