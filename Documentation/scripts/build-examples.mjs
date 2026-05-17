@@ -434,7 +434,7 @@ async function build() {
       plugins: createExamplePlugins(),
       build: {
         write: false,
-        minify: false,
+        minify: 'esbuild',
         assetsInlineLimit: Infinity,
         rollupOptions: {
           input: entryPath,
