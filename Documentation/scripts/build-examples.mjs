@@ -2,7 +2,6 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { build as viteBuild } from 'vite';
 
@@ -114,202 +113,39 @@ async function collectEntries() {
   return entries;
 }
 
-function getMimeType(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  const mimeByExt = {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.svg': 'image/svg+xml',
-    '.webp': 'image/webp',
-  };
-  return mimeByExt[ext] || 'application/octet-stream';
-}
-
-function toDataUri(filePath, source) {
-  return `data:${getMimeType(filePath)};base64,${source.toString('base64')}`;
-}
-
-/**
- * Inline CSS url() references as data URIs.
- * Required because cssRuntimePlugin converts CSS to JS strings,
- * so relative url() paths would no longer resolve at runtime.
- */
-async function inlineCssAssetUrls(code, id) {
-  const urlRegex = /url\((['"]?)([^'")]+)\1\)/g;
-  const matches = Array.from(code.matchAll(urlRegex));
-  if (!matches.length) {
-    return code;
-  }
-
-  const replacements = await Promise.all(
-    matches.map(async ([fullMatch, quote, rawUrl]) => {
-      const assetUrl = rawUrl.trim();
-      if (
-        assetUrl.startsWith('data:') ||
-        assetUrl.startsWith('http://') ||
-        assetUrl.startsWith('https://') ||
-        assetUrl.startsWith('//')
-      ) {
-        return { fullMatch, replacement: fullMatch };
-      }
-
-      const assetPath = path.resolve(path.dirname(id), assetUrl);
-      try {
-        const source = await fs.readFile(assetPath);
-        const dataUrl = toDataUri(assetPath, source);
-        return {
-          fullMatch,
-          replacement: `url(${quote}${dataUrl}${quote})`,
-        };
-      } catch (err) {
-        return { fullMatch, replacement: fullMatch };
-      }
-    })
-  );
-
-  let transformed = code;
-  replacements.forEach(({ fullMatch, replacement }) => {
-    transformed = transformed.replace(fullMatch, replacement);
-  });
-  return transformed;
-}
-
-/**
- * Convert CSS imports to JS that injects <style> tags at runtime.
- * Needed so standalone example HTML files work with a single <script> tag.
- */
-function cssRuntimePlugin() {
-  const cssFileRegex = /\.css$/i;
-  const cssModuleRegex = /\.module\.css$/i;
-  const VIRTUAL_PREFIX = '\0vtk-css-runtime:';
-  const classNameRegex = /\.([A-Za-z_][\w-]*)/g;
-
-  function toCamelCase(value) {
-    return value.replace(/-+([a-zA-Z0-9])/g, (_, c) => c.toUpperCase());
-  }
-
-  function transformCssModule(css, fileId) {
-    const fileBase = path
-      .basename(fileId, '.css')
-      .replace(/\./g, '-')
-      .replace(/[^A-Za-z0-9_-]/g, '_');
-    const classMap = {};
-    const composesMap = {};
-
-    for (const match of css.matchAll(classNameRegex)) {
-      const original = match[1];
-      if (classMap[original]) {
-        continue;
-      }
-
-      const hash = crypto
-        .createHash('sha256')
-        .update(`${fileId}:${original}`)
-        .digest('base64url')
-        .slice(0, 5);
-      classMap[original] = `${fileBase}_${original}_${hash}`;
-    }
-
-    const ruleRegex = /\.([A-Za-z_][\w-]*)\s*\{([^}]*)\}/g;
-    for (const [, ownerClass, ruleBody] of css.matchAll(ruleRegex)) {
-      const composedClasses = [];
-      const composesRegex = /composes:\s*([^;]+);/g;
-      for (const [, composesValue] of ruleBody.matchAll(composesRegex)) {
-        const localNames = composesValue
-          .split(/\s+/)
-          .map((v) => v.trim())
-          .filter((v) => v && v !== 'from' && !v.startsWith("'") && !v.startsWith('"'));
-        localNames.forEach((name) => {
-          if (classMap[name] && name !== ownerClass) {
-            composedClasses.push(name);
-          }
-        });
-      }
-      if (composedClasses.length) {
-        composesMap[ownerClass] = [...new Set(composedClasses)];
-      }
-    }
-
-    let transformedCss = css.replace(/composes:\s*[^;]+;/g, '');
-    const escapedKeys = Object.keys(classMap).sort((a, b) => b.length - a.length);
-    escapedKeys.forEach((original) => {
-      const escaped = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      transformedCss = transformedCss.replace(
-        new RegExp(`\\.${escaped}(?![\\w-])`, 'g'),
-        `.${classMap[original]}`
-      );
-    });
-
-    const moduleMap = {};
-    const resolveComposed = (className, seen = new Set()) => {
-      if (seen.has(className)) return [];
-      seen.add(className);
-      const direct = composesMap[className] || [];
-      return direct.flatMap((dep) => [dep, ...resolveComposed(dep, seen)]);
-    };
-
-    Object.entries(classMap).forEach(([original, scoped]) => {
-      const composedScoped = resolveComposed(original)
-        .map((name) => classMap[name])
-        .filter(Boolean);
-      const exportValue = [scoped, ...composedScoped].join(' ');
-      moduleMap[original] = exportValue;
-      moduleMap[toCamelCase(original)] = exportValue;
-    });
-
-    return { css: transformedCss, moduleMap };
-  }
-
+// Standalone example HTML files have a single inline script (no <link>
+// to a separate CSS asset), so any CSS Vite extracts must be inlined into
+// the JS chunk. This plugin takes Vite's normal CSS Modules output and
+// prepends a <style> injection IIFE per chunk, then drops the orphan asset.
+function inlineExtractedCssPlugin() {
   return {
-    name: 'vtk-css-runtime',
-    enforce: 'pre',
-    async resolveId(source, importer) {
-      if (!cssFileRegex.test(source)) {
-        return null;
+    name: 'vtk-inline-extracted-css',
+    enforce: 'post',
+    generateBundle(_, bundle) {
+      for (const item of Object.values(bundle)) {
+        if (item.type !== 'chunk') continue;
+        const importedCss = item.viteMetadata?.importedCss;
+        if (!importedCss || importedCss.size === 0) continue;
+
+        const cssTexts = [];
+        for (const cssFile of importedCss) {
+          const cssAsset = bundle[cssFile];
+          if (cssAsset?.type === 'asset') {
+            cssTexts.push(String(cssAsset.source));
+            delete bundle[cssFile];
+          }
+        }
+        if (cssTexts.length === 0) continue;
+
+        const cssPayload = JSON.stringify(cssTexts.join('\n'));
+        item.code =
+          `if (typeof document !== 'undefined') {\n` +
+          `  var __vtkStyle = document.createElement('style');\n` +
+          `  __vtkStyle.textContent = ${cssPayload};\n` +
+          `  (document.head || document.getElementsByTagName('head')[0]).appendChild(__vtkStyle);\n` +
+          `}\n` +
+          item.code;
       }
-
-      const resolved = await this.resolve(source, importer, { skipSelf: true });
-      if (!resolved) {
-        return null;
-      }
-
-      return `${VIRTUAL_PREFIX}${Buffer.from(resolved.id).toString('base64url')}`;
-    },
-    async load(id) {
-      if (!id.startsWith(VIRTUAL_PREFIX)) {
-        return null;
-      }
-
-      const fileId = Buffer.from(
-        id.slice(VIRTUAL_PREFIX.length),
-        'base64url'
-      ).toString('utf8');
-      const rawCss = await fs.readFile(fileId, 'utf8');
-      const inlinedCss = await inlineCssAssetUrls(rawCss, fileId);
-      const styleId = `vtk-css:${path
-        .relative(REPO_ROOT, fileId)
-        .replace(/\\/g, '/')}`;
-      let css = inlinedCss;
-      let moduleMap = {};
-
-      if (cssModuleRegex.test(fileId)) {
-        const transformed = transformCssModule(inlinedCss, fileId);
-        css = transformed.css;
-        moduleMap = transformed.moduleMap;
-      }
-
-      return `
-const css = ${JSON.stringify(css)};
-if (typeof document !== 'undefined' && !document.querySelector('style[data-vtk-css-id="${styleId}"]')) {
-  const style = document.createElement('style');
-  style.setAttribute('data-vtk-css-id', ${JSON.stringify(styleId)});
-  style.textContent = css;
-  document.head.appendChild(style);
-}
-export default ${JSON.stringify(moduleMap)};
-`;
     },
   };
 }
@@ -372,7 +208,10 @@ function createSharedViteConfig() {
 }
 
 function createExamplePlugins() {
-  return [...createVtkPlugins({ includeCjson: true }), cssRuntimePlugin()];
+  return [
+    ...createVtkPlugins({ includeCjson: true }),
+    inlineExtractedCssPlugin(),
+  ];
 }
 
 async function build() {
@@ -403,6 +242,12 @@ async function build() {
         outDir: distDir,
         emptyOutDir: false,
         minify: false,
+        // Inline CSS-referenced assets as data URIs. The CSS itself is
+        // inlined into the JS chunk by inlineExtractedCssPlugin; any
+        // extracted asset (e.g. background-image url()) would otherwise
+        // be served from an absolute path that doesn't resolve under
+        // VitePress's base prefix.
+        assetsInlineLimit: Infinity,
         rollupOptions: {
           input: esEntries,
           output: {
