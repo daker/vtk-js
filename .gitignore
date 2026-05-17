@@ -15,3 +15,8 @@ Documentation/.vitepress/dist/
 Documentation/build-tmp/
 Documentation/content/
 Documentation/Examples/
+Documentation/api/*.md
+!Documentation/api/index.md
+Documentation/examples/*.md
+!Documentation/examples/index.md
+Documentation/examples/gallery.js
