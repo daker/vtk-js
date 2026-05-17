@@ -244,9 +244,51 @@ function cleanupPlugin(outputDir) {
   };
 }
 
+// ESM CSS module wrappers (e.g. Slider.module.css.js) only export the class
+// name map; the actual stylesheet is emitted as a sibling .module.css file
+// that nothing imports. Restore the old style-loader behavior by inlining the
+// CSS into the wrapper and injecting it as a <style> tag on first evaluation.
+function injectEsmCssPlugin() {
+  return {
+    name: 'vtk-inject-esm-css',
+    enforce: 'post',
+    generateBundle(_, bundle) {
+      const cssAssetsByName = new Map();
+      for (const [key, item] of Object.entries(bundle)) {
+        if (item.type === 'asset' && item.fileName.endsWith('.module.css')) {
+          cssAssetsByName.set(item.fileName, { key, source: String(item.source) });
+        }
+      }
+      if (cssAssetsByName.size === 0) return;
+
+      for (const item of Object.values(bundle)) {
+        if (item.type !== 'chunk' || !item.fileName.endsWith('.module.css.js')) continue;
+        const cssFileName = item.fileName.replace(/\.js$/, '');
+        const css = cssAssetsByName.get(cssFileName);
+        if (!css) continue;
+
+        const cssPayload = JSON.stringify(css.source);
+        item.code =
+          `if (typeof document !== 'undefined') {\n` +
+          `  var __vtkStyle = document.createElement('style');\n` +
+          `  __vtkStyle.textContent = ${cssPayload};\n` +
+          `  (document.head || document.getElementsByTagName('head')[0]).appendChild(__vtkStyle);\n` +
+          `}\n` +
+          item.code;
+
+        delete bundle[css.key];
+      }
+    },
+  };
+}
+
 function inlineUmdCssPlugin() {
   return {
     name: 'vtk-inline-umd-css',
+    // Run after Vite's css-post plugin so the emitted CSS asset is in the
+    // bundle. Without this, generateBundle sees only the JS chunk and the
+    // plugin exits early, leaving CSS as a separate file.
+    enforce: 'post',
     generateBundle(_, bundle) {
       const cssAssets = Object.entries(bundle).filter(
         ([, item]) => item.type === 'asset' && item.fileName.endsWith('.css')
@@ -349,6 +391,7 @@ function createEsmConfig() {
     },
     plugins: [
       ...createVtkPlugins(),
+      injectEsmCssPlugin(),
       copyEsmAssetsPlugin(),
       generateDtsReferencesPlugin(),
       cleanupPlugin(esmOutputDir),
