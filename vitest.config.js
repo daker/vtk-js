@@ -15,11 +15,10 @@ function buildBrowserInstances() {
       {
         browser: 'chromium',
         launch: {
-          headless: true,
           args: ["--headless=new", "--no-sandbox", "--enable-unsafe-swiftshader", "--use-angle=swiftshader"],
         },
       },
-      { browser: 'firefox', launch: { headless: true } },
+      { browser: 'firefox' },
     ];
   }
   const launchOptions = {
@@ -77,6 +76,7 @@ export default defineConfig({
     allowOnly: !ci,
     browser: {
       enabled: true,
+      headless: true,
       provider: playwright(),
       instances: buildBrowserInstances(),
     },
