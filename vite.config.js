@@ -2,72 +2,28 @@ import { defineConfig } from 'vite';
 import * as path from 'path';
 import * as fs from 'fs';
 import glob from 'glob';
-import rewriteImports from './Utilities/build/rewrite-imports.js';
 import { createVtkPlugins } from './Utilities/build/plugins.mjs';
+import {
+  ignoreSourceFile,
+  flattenIndexEntry,
+  copyEsmAssetsPlugin,
+  copyUmdAssetsPlugin,
+  generateDtsReferencesPlugin,
+  cleanupAssetsPlugin,
+  injectEsmCssPlugin,
+  inlineUmdCssPlugin,
+} from './Utilities/build/vtk-plugins.mjs';
 
 const pkgJSON = JSON.parse(fs.readFileSync('./package.json', 'utf-8'));
 const projectRoot = path.resolve('.');
 const esmOutputDir = path.resolve('dist', 'esm');
 const umdOutputDir = path.resolve('dist', 'umd');
 
-const IGNORE_LIST = [
-  /[/\\]example_?[/\\]/,
-  /[/\\]test/,
-  /^Sources[/\\](Testing|ThirdParty)/,
-];
-
-function ignoreFile(name, ignoreList = IGNORE_LIST) {
-  return ignoreList.some((toMatch) => {
-    if (toMatch instanceof RegExp) return toMatch.test(name);
-    if (typeof toMatch === 'string') return toMatch === name;
-    return false;
-  });
-}
-
-function copyDir(src, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDir(srcPath, destPath);
-    } else {
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
-}
-
-function copyRootFiles(outputDir, patterns = ['*.txt', '*.md']) {
-  patterns.forEach((pattern) => {
-    for (const file of glob.sync(pattern)) {
-      fs.copyFileSync(file, path.join(outputDir, file));
-    }
-  });
-}
-
-function copyCommonPackageAssets(outputDir) {
-  copyRootFiles(outputDir);
-  if (fs.existsSync('.npmignore')) {
-    fs.copyFileSync('.npmignore', path.join(outputDir, '.npmignore'));
-  }
-  fs.copyFileSync('LICENSE', path.join(outputDir, 'LICENSE'));
-}
-
-function writePackageManifest(outputDir, transformPkg) {
-  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
-  transformPkg(pkg);
-  fs.writeFileSync(path.join(outputDir, 'package.json'), JSON.stringify(pkg, null, 2));
-}
-
-function rewriteDtsContent(file, rewriter) {
-  return rewriteImports(fs.readFileSync(file, 'utf-8'), rewriter);
-}
-
 const entryPoints = [
   path.join('Sources', 'macros.js'),
   path.join('Sources', 'vtk.js'),
   path.join('Sources', 'favicon.js'),
-  ...glob.sync('Sources/**/*.js').filter((file) => !ignoreFile(file)),
+  ...glob.sync('Sources/**/*.js').filter((file) => !ignoreSourceFile(file)),
 ];
 
 const esmEntries = {};
@@ -77,261 +33,6 @@ entryPoints.forEach((entry) => {
 
 const dependencies = Object.keys(pkgJSON.dependencies || {});
 const peerDependencies = Object.keys(pkgJSON.peerDependencies || {});
-
-function copyEsmAssetsPlugin() {
-  return {
-    name: 'vtk-copy-esm-assets',
-    closeBundle() {
-      const dtsFiles = glob.sync('Sources/**/*.d.ts');
-      for (const file of dtsFiles) {
-        if (ignoreFile(file)) continue;
-
-        const filename = path.basename(file);
-        const dirname = path.dirname(file);
-
-        if (filename === 'index.d.ts' && dirname !== 'Sources') {
-          const moduleName = path.basename(dirname);
-          const destPath = path.join(
-            esmOutputDir,
-            path.relative('Sources', path.dirname(dirname)),
-            `${moduleName}.d.ts`
-          );
-
-          const content = rewriteDtsContent(file, (relImport) => {
-            const baseDir = dirname;
-
-            if (relImport === '..') {
-              return `../${path.basename(path.dirname(baseDir))}`;
-            }
-
-            if (relImport.startsWith('../') || relImport.startsWith('./')) {
-              const resolvedImportPath = path.resolve(`${baseDir}/${relImport}`);
-              return `./${path
-                .relative(`${baseDir}/..`, resolvedImportPath)
-                .replace(/\\/g, '/')}`;
-            }
-
-            return relImport;
-          });
-
-          fs.mkdirSync(path.dirname(destPath), { recursive: true });
-          fs.writeFileSync(destPath, content);
-        } else {
-          const destPath = path.join(esmOutputDir, path.relative('Sources', file));
-          fs.mkdirSync(path.dirname(destPath), { recursive: true });
-          fs.copyFileSync(file, destPath);
-        }
-      }
-
-      copyDir('Utilities/XMLConverter', `${esmOutputDir}/Utilities/XMLConverter`);
-      copyDir('Utilities/DataGenerator', `${esmOutputDir}/Utilities/DataGenerator`);
-      fs.mkdirSync(`${esmOutputDir}/Utilities`, { recursive: true });
-      fs.copyFileSync('Utilities/prepare.js', `${esmOutputDir}/Utilities/prepare.js`);
-
-      fs.copyFileSync('Utilities/build/macro-shim.d.ts', `${esmOutputDir}/macro.d.ts`);
-      fs.copyFileSync('Utilities/build/macro-shim.js', `${esmOutputDir}/macro.js`);
-
-      copyCommonPackageAssets(esmOutputDir);
-      fs.copyFileSync('tsconfig.json', `${esmOutputDir}/tsconfig.json`);
-      writePackageManifest(esmOutputDir, (pkg) => {
-        pkg.name = '@kitware/vtk.js';
-        pkg.type = 'module';
-        pkg.main = './index.js';
-        pkg.module = './index.js';
-        pkg.types = './index.d.ts';
-      });
-    },
-  };
-}
-
-function copyUmdAssetsPlugin() {
-  return {
-    name: 'vtk-copy-umd-assets',
-    closeBundle() {
-      const sourceFiles = glob
-        .sync('Sources/**/*', { nodir: true })
-        .filter((file) => !ignoreFile(file) && !file.endsWith('.md'));
-
-      for (const file of sourceFiles) {
-        const destPath = path.join(umdOutputDir, file);
-        fs.mkdirSync(path.dirname(destPath), { recursive: true });
-
-        if (file.endsWith('.d.ts')) {
-          const content = rewriteDtsContent(file, (relImport) => {
-            const importPath = path.join(path.dirname(file), relImport);
-            return path.join('vtk.js', path.relative(projectRoot, importPath)).replace(/\\/g, '/');
-          });
-          fs.writeFileSync(destPath, content);
-        } else {
-          fs.copyFileSync(file, destPath);
-        }
-      }
-
-      fs.mkdirSync(path.join(umdOutputDir, 'Utilities'), { recursive: true });
-      copyDir('Utilities/XMLConverter', `${umdOutputDir}/Utilities/XMLConverter`);
-      copyDir('Utilities/DataGenerator', `${umdOutputDir}/Utilities/DataGenerator`);
-      copyDir('Utilities/config', `${umdOutputDir}/Utilities/config`);
-      fs.copyFileSync('Utilities/prepare.js', `${umdOutputDir}/Utilities/prepare.js`);
-
-      fs.copyFileSync(
-        'Utilities/build/macro-shim.d.ts',
-        `${umdOutputDir}/Sources/macro.d.ts`
-      );
-      fs.copyFileSync(
-        'Utilities/build/macro-shim.js',
-        `${umdOutputDir}/Sources/macro.js`
-      );
-
-      copyCommonPackageAssets(umdOutputDir);
-      writePackageManifest(umdOutputDir, (pkg) => {
-        pkg.name = 'vtk.js';
-        pkg.main = './vtk.js';
-        delete pkg.module;
-        delete pkg.type;
-        delete pkg.types;
-      });
-
-      // vtk-lite.js is a deprecated alias of vtk.js; see BREAKING_CHANGES.md.
-      const vtkBundle = path.join(umdOutputDir, 'vtk.js');
-      if (fs.existsSync(vtkBundle)) {
-        fs.copyFileSync(vtkBundle, path.join(umdOutputDir, 'vtk-lite.js'));
-      }
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Plugin: generate index.d.ts with triple-slash references
-// ---------------------------------------------------------------------------
-function generateDtsReferencesPlugin() {
-  return {
-    name: 'vtk-generate-dts-references',
-    closeBundle() {
-      const dtsReferences = [
-        '/// <reference path="./types.d.ts" />',
-        '/// <reference path="./interfaces.d.ts" />',
-      ];
-
-      const jsFiles = glob.sync('**/*.js', { cwd: esmOutputDir });
-      for (const file of jsFiles) {
-        const dtsFile = file.replace(/\.js$/, '.d.ts');
-        const dtsPath = path.join(esmOutputDir, dtsFile);
-
-        const flatMatch = /^(.*[/\\])([A-Z]\w+)[/\\]index\.js$/.exec(file);
-        const flatDtsFile = flatMatch ? `${flatMatch[1]}${flatMatch[2]}.d.ts` : null;
-        const flatDtsPath = flatDtsFile ? path.join(esmOutputDir, flatDtsFile) : null;
-
-        if (fs.existsSync(dtsPath) && dtsFile !== 'index.d.ts') {
-          dtsReferences.push(`/// <reference path="./${dtsFile.replace(/\\/g, '/')}" />`);
-        } else if (flatDtsPath && fs.existsSync(flatDtsPath)) {
-          dtsReferences.push(
-            `/// <reference path="./${flatDtsFile.replace(/\\/g, '/')}" />`
-          );
-        }
-      }
-
-      fs.writeFileSync(
-        path.join(esmOutputDir, 'index.d.ts'),
-        dtsReferences.join('\r\n')
-      );
-    },
-  };
-}
-
-function cleanupPlugin(outputDir) {
-  return {
-    name: `vtk-cleanup-${path.basename(outputDir)}`,
-    closeBundle() {
-      const assetsDir = path.join(outputDir, 'assets');
-      if (fs.existsSync(assetsDir)) {
-        fs.rmSync(assetsDir, { recursive: true, force: true });
-      }
-    },
-  };
-}
-
-// ESM CSS module wrappers (e.g. Slider.module.css.js) only export the class
-// name map; the actual stylesheet is emitted as a sibling .module.css file
-// that nothing imports. Restore the old style-loader behavior by inlining the
-// CSS into the wrapper and injecting it as a <style> tag on first evaluation.
-function injectEsmCssPlugin() {
-  return {
-    name: 'vtk-inject-esm-css',
-    enforce: 'post',
-    generateBundle(_, bundle) {
-      const cssAssetsByName = new Map();
-      for (const [key, item] of Object.entries(bundle)) {
-        if (item.type === 'asset' && item.fileName.endsWith('.module.css')) {
-          cssAssetsByName.set(item.fileName, { key, source: String(item.source) });
-        }
-      }
-      if (cssAssetsByName.size === 0) return;
-
-      for (const item of Object.values(bundle)) {
-        if (item.type !== 'chunk' || !item.fileName.endsWith('.module.css.js')) continue;
-        const cssFileName = item.fileName.replace(/\.js$/, '');
-        const css = cssAssetsByName.get(cssFileName);
-        if (!css) continue;
-
-        const cssPayload = JSON.stringify(css.source);
-        item.code =
-          `if (typeof document !== 'undefined') {\n` +
-          `  var __vtkStyle = document.createElement('style');\n` +
-          `  __vtkStyle.textContent = ${cssPayload};\n` +
-          `  (document.head || document.getElementsByTagName('head')[0]).appendChild(__vtkStyle);\n` +
-          `}\n` +
-          item.code;
-
-        delete bundle[css.key];
-      }
-    },
-  };
-}
-
-function inlineUmdCssPlugin() {
-  return {
-    name: 'vtk-inline-umd-css',
-    // Run after Vite's css-post plugin so the emitted CSS asset is in the
-    // bundle. Without this, generateBundle sees only the JS chunk and the
-    // plugin exits early, leaving CSS as a separate file.
-    enforce: 'post',
-    generateBundle(_, bundle) {
-      const cssAssets = Object.entries(bundle).filter(
-        ([, item]) => item.type === 'asset' && item.fileName.endsWith('.css')
-      );
-      if (!cssAssets.length) {
-        return;
-      }
-
-      const umdChunk = Object.values(bundle).find(
-        (item) => item.type === 'chunk' && item.fileName === 'vtk.js'
-      );
-      if (!umdChunk) {
-        return;
-      }
-
-      const cssText = cssAssets
-        .map(([, item]) => String(item.source))
-        .filter(Boolean)
-        .join('\n');
-      if (!cssText) {
-        return;
-      }
-
-      const cssPayload = JSON.stringify(cssText);
-      umdChunk.code =
-        `;(function(){if(typeof document==='undefined'){return;}var css=${cssPayload};` +
-        `if(!css){return;}var style=document.createElement('style');` +
-        `style.setAttribute('type','text/css');style.appendChild(document.createTextNode(css));` +
-        `(document.head||document.getElementsByTagName('head')[0]).appendChild(style);}());\n` +
-        umdChunk.code;
-
-      cssAssets.forEach(([fileName]) => {
-        delete bundle[fileName];
-      });
-    },
-  };
-}
 
 function createSharedConfig() {
   return {
@@ -362,7 +63,7 @@ function createEsmConfig() {
       outDir: esmOutputDir,
       emptyOutDir: true,
       minify: false,
-      sourcemap: false,
+      sourcemap: true,
       cssCodeSplit: true,
       lib: {
         entry: esmEntries,
@@ -371,10 +72,9 @@ function createEsmConfig() {
       rollupOptions: {
         input: esmEntries,
         preserveEntrySignatures: 'strict',
-        external: [
-          ...dependencies.map((name) => new RegExp(`^${name}`)),
-          ...peerDependencies.map((name) => new RegExp(`^${name}`)),
-        ],
+        external: [...dependencies, ...peerDependencies].map(
+          (name) => new RegExp(`^${name}(/|$)`)
+        ),
         output: {
           format: 'es',
           preserveModules: true,
@@ -382,11 +82,7 @@ function createEsmConfig() {
           entryFileNames(chunkInfo) {
             let name = chunkInfo.name;
             if (name.endsWith('.js')) name = name.slice(0, -3);
-            const match = /^((?:.*\/)?)([A-Z]\w+)\/index$/.exec(name);
-            if (match) {
-              return `${match[1]}${match[2]}.js`;
-            }
-            return `${name}.js`;
+            return `${flattenIndexEntry(name)}.js`;
           },
           assetFileNames(assetInfo) {
             const name = assetInfo.names?.[0] || assetInfo.name || '';
@@ -398,9 +94,9 @@ function createEsmConfig() {
     plugins: [
       ...createVtkPlugins(),
       injectEsmCssPlugin(),
-      copyEsmAssetsPlugin(),
-      generateDtsReferencesPlugin(),
-      cleanupPlugin(esmOutputDir),
+      copyEsmAssetsPlugin({ esmOutputDir }),
+      generateDtsReferencesPlugin({ esmOutputDir }),
+      cleanupAssetsPlugin(esmOutputDir),
     ],
   };
 }
@@ -431,8 +127,8 @@ function createUmdConfig() {
     plugins: [
       ...createVtkPlugins(),
       inlineUmdCssPlugin(),
-      copyUmdAssetsPlugin(),
-      cleanupPlugin(umdOutputDir),
+      copyUmdAssetsPlugin({ umdOutputDir, projectRoot }),
+      cleanupAssetsPlugin(umdOutputDir),
     ],
   };
 }
