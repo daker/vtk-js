@@ -9,6 +9,14 @@ const testBrowser = process.env.TEST_BROWSER || 'chromium';
 const ci = !!process.env.CI;
 
 function buildBrowserInstances() {
+  const firefoxUserPrefs = {
+    // Firefox gates WebGPU behind this pref; without it the API throws UnsupportedError.
+    'dom.webgpu.enabled': true,
+    // Headless Firefox blocklists WebGL when no real GPU is detected; force it on
+    // so llvmpipe (or any software renderer) is acceptable.
+    'webgl.force-enabled': true,
+    'webgl.disable-fail-if-major-performance-caveat': true,
+  };
   if (ci) {
     console.log('Running tests in CI mode');
     return [
@@ -18,17 +26,10 @@ function buildBrowserInstances() {
           args: ["--headless=new", "--no-sandbox", "--enable-unsafe-swiftshader", "--use-angle=swiftshader"],
         },
       },
-      { browser: 'firefox' },
+      { browser: 'firefox', launch: { firefoxUserPrefs } },
     ];
   }
-  const launchOptions = {
-    firefoxUserPrefs: {
-      // GitHub Actions does not have WebGPU for Firefox, throws UnsupportedError.
-      'dom.webgpu.enabled': true,
-      'webgl.force-enabled': true
-    }
-  };
-  return [{ browser: testBrowser, launch: launchOptions }];
+  return [{ browser: testBrowser, launch: { firefoxUserPrefs } }];
 }
 
 export default defineConfig({
