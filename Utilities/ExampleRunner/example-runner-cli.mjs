@@ -1,21 +1,20 @@
 #! /usr/bin/env node
 
-/* eslint-disable no-console */
-const { program } = require('commander');
-const path = require('path');
-const fs = require('fs');
+import { program } from 'commander';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { createServer } from 'vite';
+import { createExampleConfig } from './vite.example.config.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const SOURCES_ROOT = path.join(REPO_ROOT, 'Sources');
 const EXAMPLES_ROOT = path.join(REPO_ROOT, 'Examples');
-const VITE_CONFIG_PATH = path.join(
-  REPO_ROOT,
-  'Utilities',
-  'ExampleRunner',
-  'vite.example.config.mjs'
-);
 const DEFAULT_HOST = '0.0.0.0';
-const DEFAULT_PORT = '9999';
+const DEFAULT_PORT = 9999;
 
 program
   .option('--no-browser', 'Do not open the browser')
@@ -24,6 +23,8 @@ program
     'Specify http (default) or self-signed https for serving examples',
     'http'
   )
+  .option('--host <host>', 'Server host', DEFAULT_HOST)
+  .option('--port <port>', 'Server port', String(DEFAULT_PORT))
   .parse(process.argv);
 
 const options = program.opts();
@@ -42,27 +43,22 @@ function isStandaloneExample(relPath) {
 }
 
 function walkFiles(dirPath, onFile) {
-  if (!fs.existsSync(dirPath)) {
-    return;
-  }
-  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-  entries.forEach((entry) => {
+  if (!fs.existsSync(dirPath)) return;
+  for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
     const fullPath = path.join(dirPath, entry.name);
     if (entry.isDirectory()) {
       walkFiles(fullPath, onFile);
-      return;
+    } else {
+      onFile(fullPath);
     }
-    onFile(fullPath);
-  });
+  }
 }
 
 function collectExamples() {
   const examples = {};
 
   walkFiles(SOURCES_ROOT, (fullPath) => {
-    if (!fullPath.endsWith('index.js')) {
-      return;
-    }
+    if (!fullPath.endsWith('index.js')) return;
     const relPath = normalizePath(path.relative(SOURCES_ROOT, fullPath));
     if (
       relPath.startsWith('Testing/') ||
@@ -76,13 +72,9 @@ function collectExamples() {
   });
 
   walkFiles(EXAMPLES_ROOT, (fullPath) => {
-    if (!fullPath.endsWith('index.js')) {
-      return;
-    }
+    if (!fullPath.endsWith('index.js')) return;
     const relPath = normalizePath(path.relative(EXAMPLES_ROOT, fullPath));
-    if (!isStandaloneExample(relPath)) {
-      return;
-    }
+    if (!isStandaloneExample(relPath)) return;
     const exampleName = path.basename(path.dirname(fullPath));
     examples[exampleName] = fullPath;
   });
@@ -107,26 +99,22 @@ function printExamples(examples) {
 }
 
 async function runExample(exampleName, entryPath) {
-  const env = { ...process.env };
-  env.EXAMPLE_ENTRY = entryPath;
-  env.EXAMPLE_NAME = exampleName;
-  env.EXAMPLE_REPO_ROOT = REPO_ROOT;
-  env.EXAMPLE_HOST = env.EXAMPLE_HOST || DEFAULT_HOST;
-  env.EXAMPLE_PORT = env.EXAMPLE_PORT || DEFAULT_PORT;
-  env.EXAMPLE_OPEN = options.browser ? '1' : '0';
-  env.EXAMPLE_HTTPS = options.serverType === 'https' ? '1' : '0';
-
   console.log(`\n=> Running example "${exampleName}"`);
   console.log(
     `=> Entry: ${normalizePath(path.relative(REPO_ROOT, entryPath))}\n`
   );
 
-  Object.assign(process.env, env);
-
-  const { createServer } = await import('vite');
-  const server = await createServer({
-    configFile: VITE_CONFIG_PATH,
-  });
+  const server = await createServer(
+    createExampleConfig({
+      repoRoot: REPO_ROOT,
+      entry: entryPath,
+      name: exampleName,
+      host: options.host,
+      port: Number(options.port),
+      openBrowser: options.browser,
+      useHttps: options.serverType === 'https',
+    })
+  );
   await server.listen();
   server.printUrls();
 
