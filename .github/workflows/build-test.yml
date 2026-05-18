@@ -17,8 +17,20 @@ jobs:
         uses: ./.github/actions/setup-node-project
         with:
           node-version: '${{ matrix.node }}'
+      - name: Resolve Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium firefox
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium firefox
+      - name: Install Playwright system deps
+        run: sudo npx playwright install-deps chromium firefox
       - name: Build
         run: npm run build:release
       - name: Archive build output
