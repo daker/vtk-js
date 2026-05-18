@@ -123,11 +123,24 @@ export function copyEsmAssetsPlugin({ esmOutputDir }) {
         'Utilities/DataGenerator',
         `${esmOutputDir}/Utilities/DataGenerator`
       );
+      copyDir('Utilities/config', `${esmOutputDir}/Utilities/config`);
       fs.mkdirSync(`${esmOutputDir}/Utilities`, { recursive: true });
       fs.copyFileSync(
         'Utilities/prepare.js',
         `${esmOutputDir}/Utilities/prepare.js`
       );
+
+      // Flip these CJS subdirs back to CommonJS scope (root is type: module).
+      for (const dir of [
+        'Utilities/config',
+        'Utilities/XMLConverter',
+        'Utilities/DataGenerator',
+      ]) {
+        fs.writeFileSync(
+          `${esmOutputDir}/${dir}/package.json`,
+          `${JSON.stringify({ type: 'commonjs' }, null, 2)}\n`
+        );
+      }
 
       fs.copyFileSync(
         'Utilities/build/macro-shim.d.ts',

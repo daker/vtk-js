@@ -46,6 +46,17 @@ jobs:
         run: |
           npx tsc -p tsconfig.esm-check.json
           npx tsc -p tsconfig.umd-check.json
+      - name: Smoke-test packed ESM tarball
+        if: matrix.browser == 'chromium'
+        run: |
+          tarball=$(npm pack ./dist/esm --silent)
+          mkdir -p /tmp/vtk-smoke
+          cd /tmp/vtk-smoke
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund "$GITHUB_WORKSPACE/$tarball"
+          node -e "require('@kitware/vtk.js/Utilities/config/rules-vtk')"
+          node -e "require('@kitware/vtk.js/Utilities/config/chainWebpack')"
+          npx --no-install vtkDataConverter --help
       - name: Tests
         env:
           TEST_BROWSER: ${{ matrix.browser }}
