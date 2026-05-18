@@ -7,10 +7,12 @@ jobs:
   build-test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-24.04]
         node: [22]
-    name: ${{ matrix.os }} and node ${{ matrix.node }}
+        browser: [chromium, firefox]
+    name: ${{ matrix.os }} / node ${{ matrix.node }} / ${{ matrix.browser }}
     steps:
       - uses: actions/checkout@v6
       - name: Setup project
@@ -25,16 +27,16 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ matrix.os }}-${{ steps.playwright.outputs.version }}
-      - name: Install Playwright browsers
+          key: playwright-${{ matrix.os }}-${{ matrix.browser }}-${{ steps.playwright.outputs.version }}
+      - name: Install Playwright browser
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install chromium firefox
+        run: npx playwright install ${{ matrix.browser }}
       - name: Install Playwright system deps
-        run: sudo npx playwright install-deps chromium firefox
+        run: sudo npx playwright install-deps ${{ matrix.browser }}
       - name: Build
         run: npm run build:release
       - name: Archive build output
-        if: github.event_name != 'merge_group'
+        if: github.event_name != 'merge_group' && matrix.browser == 'chromium'
         uses: actions/upload-artifact@v7
         with:
           name: build-results-${{ matrix.os }}-node_${{ matrix.node }}
@@ -44,13 +46,15 @@ jobs:
         run: |
           npx tsc -p tsconfig.esm-check.json
           npx tsc -p tsconfig.umd-check.json
-      - name: Chrome and Firefox tests
+      - name: Tests
+        env:
+          TEST_BROWSER: ${{ matrix.browser }}
         run: xvfb-run --auto-servernum npm test
       - name: Archive test results
         if: github.event_name != 'merge_group' && (success() || failure())
         uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
-          name: test-results-${{ matrix.os }}-node_${{ matrix.node }}
+          name: test-results-${{ matrix.os }}-node_${{ matrix.node }}-${{ matrix.browser }}
           path: Utilities/TestResults/
           retention-days: 15

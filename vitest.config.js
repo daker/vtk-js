@@ -8,34 +8,29 @@ const webGPU = !!process.env.WEBGPU;
 const testBrowser = process.env.TEST_BROWSER || 'chromium';
 const ci = !!process.env.CI;
 
-// Per-instance launch.headless is load-bearing for Firefox WebGL on Linux CI;
-// the top-level browser.headless takes a different launch path that drops WebGL.
+const firefoxUserPrefs = {
+  'dom.webgpu.enabled': true, // off by default on Linux Firefox
+  'webgl.force-enabled': true, // override GPU blocklist (no real GPU on CI)
+  'webgl.disable-fail-if-major-performance-caveat': true, // accept llvmpipe
+};
+
+const chromiumArgs = ci
+  ? ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-angle=swiftshader']
+  : [];
+
 const firefox = {
   browser: 'firefox',
-  launch: {
-    headless: true,
-    firefoxUserPrefs: {
-      'dom.webgpu.enabled': true, // off by default on Linux Firefox
-      'webgl.force-enabled': true, // override GPU blocklist (no real GPU on CI)
-      'webgl.disable-fail-if-major-performance-caveat': true, // accept llvmpipe
-    },
-  },
+  headless: false, // supported Vitest Browser option; xvfb-run supplies the display on CI
 };
 
 function buildBrowserInstances() {
-  if (ci) {
-    return [
-      {
-        browser: 'chromium',
-        launch: {
-          headless: true,
-          args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'],
-        },
-      },
-      firefox,
-    ];
-  }
-  return [testBrowser === 'firefox' ? firefox : { browser: 'chromium', launch: { headless: true } }];
+  if (testBrowser === 'firefox') return [firefox];
+  return [{ browser: 'chromium' }];
+}
+
+function buildPlaywrightLaunchOptions() {
+  if (testBrowser === 'firefox') return { firefoxUserPrefs };
+  return chromiumArgs.length ? { args: chromiumArgs } : {};
 }
 
 export default defineConfig({
@@ -82,7 +77,9 @@ export default defineConfig({
     browser: {
       enabled: true,
       headless: true,
-      provider: playwright(),
+      provider: playwright({
+        launchOptions: buildPlaywrightLaunchOptions(),
+      }),
       instances: buildBrowserInstances(),
     },
   },
