@@ -22,7 +22,7 @@ jobs:
       name: npm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Setup project
@@ -40,10 +40,10 @@ jobs:
           npx tsc -p tsconfig.esm-check.json
           npx tsc -p tsconfig.umd-check.json
       - name: Chrome and Firefox tests
-        run: xvfb-run --auto-servernum npm run test:reporter
+        run: xvfb-run --auto-servernum npm test
       - name: Archive test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results
           path: Utilities/TestResults/
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
       - name: Setup project

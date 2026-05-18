@@ -8,21 +8,16 @@ const webGPU = !!process.env.WEBGPU;
 const testBrowser = process.env.TEST_BROWSER || 'chromium';
 const ci = !!process.env.CI;
 
-// Per-instance launch.headless: true is what actually makes Playwright launch
-// the browser with the right headless flag. The top-level browser.headless
-// covers Vitest's UI tab but is not enough on its own — Firefox in Vitest's
-// global-headless path drops WebGL on Linux CI runners.
+// Per-instance launch.headless is load-bearing for Firefox WebGL on Linux CI;
+// the top-level browser.headless takes a different launch path that drops WebGL.
 const firefox = {
   browser: 'firefox',
   launch: {
     headless: true,
     firefoxUserPrefs: {
-      // Firefox gates WebGPU behind this pref; without it the API throws UnsupportedError.
-      'dom.webgpu.enabled': true,
-      // Headless Firefox blocklists WebGL when no real GPU is detected; force it on
-      // so llvmpipe (or any software renderer) is acceptable.
-      'webgl.force-enabled': true,
-      'webgl.disable-fail-if-major-performance-caveat': true,
+      'dom.webgpu.enabled': true, // off by default on Linux Firefox
+      'webgl.force-enabled': true, // override GPU blocklist (no real GPU on CI)
+      'webgl.disable-fail-if-major-performance-caveat': true, // accept llvmpipe
     },
   },
 };
