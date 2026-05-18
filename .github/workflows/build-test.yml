@@ -12,7 +12,7 @@ jobs:
         node: [22]
     name: ${{ matrix.os }} and node ${{ matrix.node }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup project
         uses: ./.github/actions/setup-node-project
         with:
@@ -22,7 +22,7 @@ jobs:
         run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
@@ -35,7 +35,7 @@ jobs:
         run: npm run build:release
       - name: Archive build output
         if: github.event_name != 'merge_group'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-results-${{ matrix.os }}-node_${{ matrix.node }}
           path: dist
@@ -45,10 +45,10 @@ jobs:
           npx tsc -p tsconfig.esm-check.json
           npx tsc -p tsconfig.umd-check.json
       - name: Chrome and Firefox tests
-        run: npm test
+        run: xvfb-run --auto-servernum npm test
       - name: Archive test results
         if: github.event_name != 'merge_group' && (success() || failure())
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
           name: test-results-${{ matrix.os }}-node_${{ matrix.node }}
