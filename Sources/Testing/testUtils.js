@@ -85,13 +85,14 @@ async function compareImages(image, baselines, testName, opts) {
     }
   });
 
-  expect(isSameDimensions).toBeTruthy();
   expect(
-    minDelta < mismatchTolerance,
-    `[${testName}] delta ${minDelta.toFixed(
-      2
-    )}% (count: ${minRawCount}, baseline: ${minIndex})`
-  ).toBeTruthy();
+    isSameDimensions,
+    `[${testName}] image dimensions match baseline`
+  ).toBe(true);
+  const summary = `[${testName}] delta ${minDelta.toFixed(
+    2
+  )}% (count: ${minRawCount}, baseline: ${minIndex})`;
+  expect(minDelta, summary).toBeLessThan(mismatchTolerance);
 }
 
 function createGarbageCollector() {
