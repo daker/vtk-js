@@ -8,27 +8,33 @@ const webGPU = !!process.env.WEBGPU;
 const testBrowser = process.env.TEST_BROWSER || 'chromium';
 const ci = !!process.env.CI;
 
+const firefox = {
+  browser: 'firefox',
+  launch: {
+    firefoxUserPrefs: {
+      // Firefox gates WebGPU behind this pref; without it the API throws UnsupportedError.
+      'dom.webgpu.enabled': true,
+      // Headless Firefox blocklists WebGL when no real GPU is detected; force it on
+      // so llvmpipe (or any software renderer) is acceptable.
+      'webgl.force-enabled': true,
+      'webgl.disable-fail-if-major-performance-caveat': true,
+    },
+  },
+};
+
 function buildBrowserInstances() {
-  const firefoxUserPrefs = {
-    // Firefox gates WebGPU behind this pref; without it the API throws UnsupportedError.
-    'dom.webgpu.enabled': true,
-    // Headless Firefox blocklists WebGL when no real GPU is detected; force it on
-    // so llvmpipe (or any software renderer) is acceptable.
-    'webgl.force-enabled': true,
-    'webgl.disable-fail-if-major-performance-caveat': true,
-  };
   if (ci) {
     return [
       {
         browser: 'chromium',
         launch: {
-          args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-angle=swiftshader"],
+          args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'],
         },
       },
-      { browser: 'firefox', launch: { firefoxUserPrefs } },
+      firefox,
     ];
   }
-  return [{ browser: testBrowser, launch: { firefoxUserPrefs } }];
+  return [testBrowser === 'firefox' ? firefox : { browser: 'chromium' }];
 }
 
 export default defineConfig({
