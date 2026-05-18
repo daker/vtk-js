@@ -9,6 +9,7 @@ dist/
 coverage/
 .env
 Utilities/TestResults
+.vitest-attachments/
 .idea
 Documentation/.vitepress/cache/
 Documentation/.vitepress/dist/

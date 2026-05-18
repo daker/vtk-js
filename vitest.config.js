@@ -77,6 +77,7 @@ export default defineConfig({
     browser: {
       enabled: true,
       headless: true,
+      screenshotDirectory: 'Utilities/TestResults/screenshots',
       provider: playwright({
         launchOptions: buildPlaywrightLaunchOptions(),
       }),
