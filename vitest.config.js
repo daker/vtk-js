@@ -18,12 +18,11 @@ function buildBrowserInstances() {
     'webgl.disable-fail-if-major-performance-caveat': true,
   };
   if (ci) {
-    console.log('Running tests in CI mode');
     return [
       {
         browser: 'chromium',
         launch: {
-          args: ["--headless=new", "--no-sandbox", "--enable-unsafe-swiftshader", "--use-angle=swiftshader"],
+          args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-angle=swiftshader"],
         },
       },
       { browser: 'firefox', launch: { firefoxUserPrefs } },
@@ -68,9 +67,7 @@ export default defineConfig({
     setupFiles: ['Sources/Testing/setupTestEnv.js'],
     testTimeout: 120000,
     reporters: ['default', 'junit'],
-    outputFile: {
-      junit: 'Utilities/TestResults/junit-report.xml',
-    },
+    outputFile: { junit: 'Utilities/TestResults/junit-report.xml' },
     fileParallelism: false, // GPU tests should run sequentially
     maxWorkers: 1, // Single worker for GPU resource management
     retry: ci ? 1 : 0,
