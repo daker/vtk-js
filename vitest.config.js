@@ -8,9 +8,14 @@ const webGPU = !!process.env.WEBGPU;
 const testBrowser = process.env.TEST_BROWSER || 'chromium';
 const ci = !!process.env.CI;
 
+// Per-instance launch.headless: true is what actually makes Playwright launch
+// the browser with the right headless flag. The top-level browser.headless
+// covers Vitest's UI tab but is not enough on its own — Firefox in Vitest's
+// global-headless path drops WebGL on Linux CI runners.
 const firefox = {
   browser: 'firefox',
   launch: {
+    headless: true,
     firefoxUserPrefs: {
       // Firefox gates WebGPU behind this pref; without it the API throws UnsupportedError.
       'dom.webgpu.enabled': true,
@@ -28,13 +33,14 @@ function buildBrowserInstances() {
       {
         browser: 'chromium',
         launch: {
+          headless: true,
           args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'],
         },
       },
       firefox,
     ];
   }
-  return [testBrowser === 'firefox' ? firefox : { browser: 'chromium' }];
+  return [testBrowser === 'firefox' ? firefox : { browser: 'chromium', launch: { headless: true } }];
 }
 
 export default defineConfig({
