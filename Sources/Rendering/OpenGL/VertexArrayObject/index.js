@@ -16,16 +16,7 @@ function vtkOpenGLVertexArrayObject(publicAPI, model) {
 
   publicAPI.initialize = () => {
     model.instancingExtension = null;
-    if (!model._openGLRenderWindow.getWebgl2()) {
-      model.instancingExtension = model.context.getExtension(
-        'ANGLE_instanced_arrays'
-      );
-    }
-    if (
-      !model.forceEmulation &&
-      model._openGLRenderWindow &&
-      model._openGLRenderWindow.getWebgl2()
-    ) {
+    if (!model.forceEmulation && model._openGLRenderWindow) {
       model.extension = null;
       model.supported = true;
       model.handleVAO = model.context.createVertexArray();

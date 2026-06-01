@@ -201,13 +201,11 @@ function vtkOpenGLOrderIndependentTranslucentPass(publicAPI, model) {
     const size = viewNode.getSize();
     const gl = viewNode.getContext();
 
-    // if we lack the webgl2 and half floatsupport just do
-    // basic alpha blending
+    // If required float color buffer support is missing, fall back to basic alpha blending.
     model._supported = false;
     if (
       renNode.getSelector() ||
       !gl ||
-      !viewNode.getWebgl2() ||
       (!gl.getExtension('EXT_color_buffer_half_float') &&
         !gl.getExtension('EXT_color_buffer_float'))
     ) {
@@ -242,9 +240,7 @@ function vtkOpenGLOrderIndependentTranslucentPass(publicAPI, model) {
 
     gl.colorMask(false, false, false, false);
 
-    // rerender the opaque pass to set the depth buffer
-    // TODO remove when webgl1 is deprecated and instead
-    // have the forward pass use a texture backed zbuffer
+    // Re-render the opaque pass to set the depth buffer.
     if (forwardPass.getOpaqueActorCount() > 0) {
       // Don't use zBufferPass as it will also render the depth of translucent actors
       forwardPass.setCurrentOperation('opaqueZBufferPass');

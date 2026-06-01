@@ -60,13 +60,8 @@ function vtkOpenGLGlyph3DMapper(publicAPI, model) {
 
     // apply faceCulling
     const gl = model.context;
-    if (model._openGLRenderWindow.getWebgl2()) {
-      model.hardwareSupport = true;
-      model.extension = null;
-    } else if (!model.extension) {
-      model.extension = model.context.getExtension('ANGLE_instanced_arrays');
-      model.hardwareSupport = !!model.extension;
-    }
+    model.hardwareSupport = true;
+    model.extension = null;
     // to test without extension support uncomment the next two lines
     // model.extension = null;
     // model.hardwareSupport = !!model.extension;
