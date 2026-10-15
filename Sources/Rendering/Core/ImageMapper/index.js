@@ -35,9 +35,35 @@ function vtkImageMapper(publicAPI, model) {
         case SlicingMode.Z:
           pos3 = [(bds[1] + bds[0]) / 2, (bds[3] + bds[2]) / 2, pos];
           break;
-        default:
+        case SlicingMode.I:
+        case SlicingMode.J:
+        case SlicingMode.K: {
+          // The scalar is a world position along the world axis closest to
+          // the IJK slicing axis. The direction matrix is column major, so
+          // column ijkMode holds the world vector of that data axis.
+          const ijkMode = model.slicingMode;
+          const sparse = vtkMath.getSparseOrthogonalMatrix(
+            image.getDirection()
+          );
+          let xyzMode = 0;
+          for (; xyzMode < 3; ++xyzMode) {
+            if (sparse[xyzMode + 3 * ijkMode] !== 0) {
+              break;
+            }
+          }
+          pos3 = [
+            (bds[1] + bds[0]) / 2,
+            (bds[3] + bds[2]) / 2,
+            (bds[5] + bds[4]) / 2,
+          ];
+          pos3[xyzMode] = pos;
           break;
+        }
+        default:
+          return 0;
       }
+    } else {
+      return 0;
     }
 
     const ijk = [0, 0, 0];

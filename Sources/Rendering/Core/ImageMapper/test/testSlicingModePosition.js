@@ -29,3 +29,30 @@ it('Test slice position differences between XYZ and IJK modes', () => {
   expect(0).toBe(mapper.getSliceAtPosition(-1));
   expect(10).toBe(mapper.getSliceAtPosition(110));
 });
+
+it('Test scalar world position in IJK modes with negative origin', () => {
+  const source = vtkRTAnalyticSource.newInstance({
+    wholeExtent: [0, 10, 0, 10, 0, 10],
+  });
+  source.update();
+  const image = source.getOutputData();
+  image.setSpacing([2, 2, 2]);
+  image.setOrigin([-200, -100, -50]);
+  const mapper = vtkImageMapper.newInstance();
+  mapper.setInputData(image);
+
+  mapper.setSlicingMode(SlicingMode.K);
+  expect(mapper.getSliceAtPosition(-40)).toBe(5);
+  expect(mapper.getSliceAtPosition(-60)).toBe(0);
+
+  mapper.setSlicingMode(SlicingMode.J);
+  expect(mapper.getSliceAtPosition(-94)).toBe(3);
+
+  mapper.setSlicingMode(SlicingMode.I);
+  expect(mapper.getSliceAtPosition(-181)).toBe(9.5);
+
+  // K axis along world X: the scalar is a world X position.
+  image.setDirection([0, 0, 1, 0, 1, 0, 1, 0, 0]);
+  mapper.setSlicingMode(SlicingMode.K);
+  expect(mapper.getSliceAtPosition(-196)).toBe(2);
+});
